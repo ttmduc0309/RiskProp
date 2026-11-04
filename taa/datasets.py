@@ -14,6 +14,11 @@ from .utils import get_fps
 from .splits import cap_test, dada_test, nexar_val
 
 
+def _optional_csv_value(row, key):
+    value = row.get(key)
+    return None if value is None or pd.isna(value) or value == "" else value
+
+
 @DATASETS.register_module()
 class MultiDataset(BaseDataset):
     def __init__(
@@ -29,6 +34,9 @@ class MultiDataset(BaseDataset):
         train_with_val=False,
         val_train=False,
         indices=None,
+        video_ids=None,
+        include_test=True,
+        test_only=False,
     ) -> None:
         self.cap = cap
         self.dada = dada
@@ -45,6 +53,9 @@ class MultiDataset(BaseDataset):
         self.train_with_val = train_with_val
         self.val_train = val_train
         self._indices = indices
+        self._video_ids = video_ids
+        self.include_test = include_test
+        self.test_only = test_only
         self._metainfo = self._load_metainfo(None)
         self.serialize_data = True
         self.max_refetch = 1000
@@ -291,23 +302,21 @@ class MultiDataset(BaseDataset):
                 )
 
         if self.nexar:
-            fin = pd.read_csv(osp.join(self.nexar["data_root"], self.nexar["ann_file"])).values.tolist()
-            for line in fin:
-                video_id = str(int(line[0])).zfill(5)
-                is_test = bool(line[1])
-                target = bool(line[6]) if not is_test else None
-                if not is_test:
-                    filename = "train"
-                    frame_dir = "train_raw_frames"
-                else:
-                    filename = "test"
-                    frame_dir = "test_raw_frames"
-                filename = osp.join(self.nexar["data_root"], filename, video_id + ".mp4")
-                frame_dir = osp.join(self.nexar["data_root"], frame_dir, video_id)
-                fps = 30
+            fin = pd.read_csv(osp.join(self.nexar["data_root"], self.nexar["ann_file"])).to_dict("records")
+            for row in fin:
+                video_id = str(int(row["video_id"])).zfill(5)
+                is_test = bool(int(row["is_test"]))
+                raw_target = _optional_csv_value(row, "target")
+                target = None if raw_target is None else bool(int(raw_target))
+                split_dir = "test" if is_test else "train"
+                filename = osp.join(self.nexar["data_root"], split_dir, video_id + ".mp4")
+                frame_dir = None
+                fps = float(row["fps"])
 
                 # keep the train videos
                 if not self.test_mode and is_test:
+                    continue
+                if self.test_mode and is_test and not self.include_test:
                     continue
 
                 if not self.test_mode and not self.train_with_val and video_id in nexar_val:
@@ -327,19 +336,52 @@ class MultiDataset(BaseDataset):
                         video_id=video_id,
                         type=None,
                         target=target,
-                        abnormal_start_frame=int(line[4]) if not is_test and target else None,
-                        accident_frame=int(line[5]) if not is_test and target else None,
-                        total_frames=int(line[2]),
+                        abnormal_start_frame=(
+                            int(row["abnormal_start_frame"])
+                            if not is_test and target and _optional_csv_value(row, "abnormal_start_frame") is not None
+                            else None
+                        ),
+                        accident_frame=(
+                            int(row["accident_frame"])
+                            if not is_test and target and _optional_csv_value(row, "accident_frame") is not None
+                            else None
+                        ),
+                        onset_time_sec=(
+                            float(_optional_csv_value(row, "onset_time_sec"))
+                            if _optional_csv_value(row, "onset_time_sec") is not None
+                            else None
+                        ),
+                        event_time_sec=(
+                            float(_optional_csv_value(row, "event_time_sec"))
+                            if _optional_csv_value(row, "event_time_sec") is not None
+                            else None
+                        ),
+                        test_partition=_optional_csv_value(row, "test_partition"),
+                        total_frames=int(row["total_frames"]),
                         fps=fps,
                         is_val=video_id in nexar_val,
                         is_test=is_test,
                     )
                 )
+        if self.test_only:
+            data_list = [item for item in data_list if item.get("is_test", False)]
+        if self._video_ids is not None:
+            selected = set()
+            for entry in self._video_ids:
+                split, video_id = entry.split(":", 1)
+                if split not in ("train", "test"):
+                    raise ValueError("video_ids entries must start with train: or test:")
+                selected.add((split, video_id.zfill(5)))
+            data_list = [
+                item
+                for item in data_list
+                if ("test" if item["is_test"] else "train", item["video_id"]) in selected
+            ]
         return data_list
 
     def prepare_data(self, idx):
         data_info = self.get_data_info(idx)
-        if data_info["dataset"] in ["d2city"]:
+        if data_info["dataset"] in ["d2city", "nexar"]:
             pipeline = self.pipeline_video
         else:
             pipeline = self.pipeline_frame

@@ -49,7 +49,7 @@ class AnticipationHead(BaseHead):
         self.avg_pool2d = nn.AdaptiveAvgPool2d(1)
         self.avg_pool3d = nn.AdaptiveAvgPool3d(1)
         self.dropout = nn.Dropout(p=dropout)
-        self.pos_weight = torch.tensor(pos_weight)
+        self.pos_weight = float(pos_weight)
         self.init_std = init_std
         self.clip_len = clip_len
         self.num_clips = num_clips
@@ -246,7 +246,7 @@ class AnticipationHead(BaseHead):
                     labels.append(torch.zeros_like(cls_scores[i, :]))
             preds, labels = torch.concatenate(preds), torch.concatenate(labels)
 
-            loss_cls = self.loss_cls(preds, labels, pos_weight=self.pos_weight)
+            loss_cls = self.loss_cls(preds, labels, pos_weight=preds.new_tensor(self.pos_weight))
             loss_ffr = ((cls_scores[:, 1:].detach() - cls_scores[:, :-1]) ** 2).mean()
             #loss_mono = self.monotony_loss(cls_scores, data_samples)
             loss_adaptive = self.adaptive_mono_loss(cls_scores, data_samples)
@@ -288,7 +288,7 @@ class AnticipationHead(BaseHead):
                 labels.append(torch.from_numpy(label))
             labels = torch.concatenate(labels).float().to(cls_scores.device)
 
-            loss_cls = self.loss_cls(cls_scores, labels, pos_weight=self.pos_weight)
+            loss_cls = self.loss_cls(cls_scores, labels, pos_weight=cls_scores.new_tensor(self.pos_weight))
             #return dict(loss_cls=loss_cls)
             cls_scores = cls_scores.reshape(len(data_samples), -1)
             loss_ffr = ((cls_scores[:, 1:].detach()- cls_scores[:, :-1]) ** 2).mean()
@@ -299,7 +299,7 @@ class AnticipationHead(BaseHead):
             loss_ffr_weight= 1.5
             loss_mono_weight= 1.1
             return dict(
-                loss_cls=loss_cls * loss_cls_weight
+                loss_cls=loss_cls * loss_cls_weight,
                 loss_ffr=loss_ffr * loss_ffr_weight,
                 loss_mono=loss_adaptive * loss_mono_weight
             )

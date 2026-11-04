@@ -41,20 +41,28 @@ class SampleFramesBeforeAccident(BaseTransform):
                 to the next transform in pipeline.
         """
         total_frames = results["total_frames"]
-        assert results["fps"] in [30, 20, 10]
-        frame_interval = results["fps"] // 10
+        fps = float(results["fps"])
+        if fps < 10:
+            raise ValueError("Sampling at 10 fps requires source video fps >= 10, got {}".format(fps))
+        frame_interval = max(1, int(round(fps / 10)))
 
         accident_frame = results["accident_frame"]
         start_index = results["start_index"]
 
         clip_inds = np.concatenate(np.arange(self.num_clips)[:, None] + np.arange(self.clip_len)[None, :])
-        clip_inds *= frame_interval
+        clip_inds = np.rint(clip_inds * fps / 10).astype(np.int32)
         clip_inds_max = clip_inds[-1]
+        three_second_span = int(round(fps * 3))
 
         if self.test_mode:
             if results["target"] is True:
-                # The last frame of the clip is the accident frame
-                clip_inds += accident_frame - start_index - clip_inds_max
+                if accident_frame is None:
+                    # Test labels do not expose an accident frame. Use the
+                    # observed clip tail without consulting event-time labels.
+                    clip_inds += total_frames - 1 - clip_inds_max
+                else:
+                    # The last frame of the clip is the accident frame
+                    clip_inds += accident_frame - start_index - clip_inds_max
             elif results["target"] is False:
                 if accident_frame is None:
                     if total_frames > clip_inds_max:
@@ -64,12 +72,12 @@ class SampleFramesBeforeAccident(BaseTransform):
                         # The last frame of the clip is the last frame of the video
                         clip_inds += total_frames - 1 - clip_inds_max
                 else:
-                    if accident_frame - start_index - frame_interval * 30 > clip_inds_max:
+                    if accident_frame - start_index - three_second_span > clip_inds_max:
                         # The first frame of the clip is the first frame of the video
                         clip_inds += 0
                     else:
                         # The last frame of the clip is 3s before the accident frame
-                        clip_inds += accident_frame - start_index - frame_interval * 30 - clip_inds_max
+                        clip_inds += accident_frame - start_index - three_second_span - clip_inds_max
             elif results["target"] is None:
                 # The last frame of the clip is the last frame of the video
                 clip_inds += total_frames - 1 - clip_inds_max
@@ -84,10 +92,10 @@ class SampleFramesBeforeAccident(BaseTransform):
                     else:
                         clip_inds += total_frames - 1 - clip_inds_max
                 else:
-                    if accident_frame - start_index - frame_interval * 30 > clip_inds_max:
-                        clip_inds += np.random.randint(0, accident_frame - start_index - frame_interval * 30 - clip_inds_max)
+                    if accident_frame - start_index - three_second_span > clip_inds_max:
+                        clip_inds += np.random.randint(0, accident_frame - start_index - three_second_span - clip_inds_max)
                     else:
-                        clip_inds += accident_frame - start_index - frame_interval * 30 - clip_inds_max
+                        clip_inds += accident_frame - start_index - three_second_span - clip_inds_max
 
         frame_inds = np.maximum(clip_inds, 0) + start_index
 
@@ -95,6 +103,44 @@ class SampleFramesBeforeAccident(BaseTransform):
         results["frame_interval"] = frame_interval
         results["clip_len"] = self.clip_len
         results["num_clips"] = self.num_clips
+        return results
+
+
+@TRANSFORMS.register_module()
+class SampleFullVideoCausalFrames(BaseTransform):
+    """Create 10-Hz causal snippets covering the complete video timeline.
+
+    Each output snippet ends at one 10-Hz timestamp. At the beginning of a
+    video, missing history is padded by repeating the first available frame.
+    """
+
+    def __init__(self, clip_len: int = 5, **kwargs) -> None:
+        self.clip_len = int(clip_len)
+        if self.clip_len < 1:
+            raise ValueError("clip_len must be at least 1")
+
+    def transform(self, results: dict) -> dict:
+        total_frames = int(results["total_frames"])
+        fps = float(results["fps"])
+        start_index = int(results["start_index"])
+        if total_frames < 1 or fps < 10:
+            raise ValueError("full-video 10-Hz sampling requires frames and source fps >= 10")
+
+        duration_sec = (total_frames - 1) / fps
+        output_times_sec = np.arange(int(np.floor(duration_sec * 10.0)) + 1, dtype=np.float64) / 10.0
+        if duration_sec - output_times_sec[-1] > 1e-6:
+            output_times_sec = np.append(output_times_sec, duration_sec)
+        history_times_sec = np.arange(self.clip_len - 1, -1, -1, dtype=np.float64) / 10.0
+        clip_inds = np.rint(
+            (output_times_sec[:, None] - history_times_sec[None, :]) * fps
+        ).astype(np.int32)
+        clip_inds = np.clip(clip_inds, 0, total_frames - 1) + start_index
+
+        results["frame_inds"] = clip_inds.reshape(-1)
+        results["frame_interval"] = max(1, int(round(fps / 10.0)))
+        results["clip_len"] = self.clip_len
+        results["num_clips"] = len(output_times_sec)
+        results["frame_timestamps_sec"] = (clip_inds[:, -1] - start_index).astype(np.float64) / fps
         return results
 
 
