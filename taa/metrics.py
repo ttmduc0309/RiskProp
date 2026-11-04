@@ -140,14 +140,23 @@ class AnticipationMetric(BaseMetric):
         if self.compute_test_mtta and test_results:
             if any(
                 result["target"] is None
-                or "onset_time_sec" not in result
-                or "event_time_sec" not in result
-                or "frame_timestamps_sec" not in result
+                or result.get("frame_timestamps_sec") is None
                 for result in test_results
             ):
                 raise ValueError(
                     "Test mTTA requires labels, onset/event timestamps, and full-video frame timestamps; "
                     "prepare enriched Nexar annotations and use SampleFullVideoCausalFrames."
+                )
+            if any(
+                result["target"]
+                and (
+                    result.get("onset_time_sec") is None
+                    or result.get("event_time_sec") is None
+                )
+                for result in test_results
+            ):
+                raise ValueError(
+                    "Test mTTA requires onset and event timestamps for every positive video."
                 )
             test_scores = []
             for result in test_results:
@@ -159,8 +168,16 @@ class AnticipationMetric(BaseMetric):
                 predictions=test_scores,
                 timestamps_sec=[np.asarray(x["frame_timestamps_sec"]).reshape(-1) for x in test_results],
                 targets=[bool(x["target"]) for x in test_results],
-                onset_times_sec=[float(x["onset_time_sec"]) for x in test_results],
-                event_times_sec=[float(x["event_time_sec"]) for x in test_results],
+                # Nexar negatives intentionally have no onset/event labels.
+                # The metric only reads these values for positive videos.
+                onset_times_sec=[
+                    float(x["onset_time_sec"]) if x["target"] else 0.0
+                    for x in test_results
+                ],
+                event_times_sec=[
+                    float(x["event_time_sec"]) if x["target"] else 0.0
+                    for x in test_results
+                ],
                 far_max=self.fpr_max,
             )
             eval_results[f"mtta_test@{self.fpr_max:g}"] = mtta_result["mtta"]

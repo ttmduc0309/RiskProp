@@ -53,37 +53,30 @@ CUDA_VISIBLE_DEVICES=0,1 PORT=29517 conda run -n riskprop \
   work_dirs/riskprop_nexar_smoke_l40/epoch_1.pth 2
 ```
 
-## Full-timeline mTTA evaluation
+## Full Nexar test evaluation: mAP and mTTA
 
-`configs/riskprop_nexar_mtta.py` evaluates each test video with causal 5-frame
-windows ending every 0.1 seconds across the complete clip. The converter keeps
-the test class labels and stores alert/event times in clip-relative seconds;
-the event time is after the final observed frame by Nexar's
-`time_to_accident`. Re-run the converter after updating this checkout so the
-annotation CSV has `onset_time_sec`, `event_time_sec`, and `test_partition`.
-The evaluator writes the normal scalar submission plus
-`test_temporal_predictions.jsonl`. At FAR 0.1 it reports both
-`mtta_test@0.1` (RiskProp-code-compatible; censored positives contribute zero)
-and `mtta_test_evaluable@0.1` (excludes only positives whose onset is beyond
-the observed clip; observable misses still contribute zero). It also reports
-the positive/evaluable/censored counts and maximum empirical FAR among selected
-thresholds. If no positive onset is observable, the evaluable-only metric is
-omitted.
+For full Nexar test evaluation, use the existing distributed test script with
+`configs/riskprop_nexar.py`. It now runs the standard Nexar submission
+benchmark for Public/Private/All mAP and then full-timeline inference for
+timestamp-based mTTA. It writes both metric groups to one `test_results.json`
+and one `test_benchmark_report.md`, and keeps the submission CSV and temporal
+prediction JSONL under the same work directory.
 
 ```bash
-conda run -n riskprop python tools/prepare_nexar.py \
-  --source-root /data/home/ducttm/project/colision_prediction/datasets/Nexar \
-  --output-root data/nexar-collision-prediction
-
-CUDA_VISIBLE_DEVICES=0,1 PORT=29519 conda run -n riskprop \
-  bash tools/dist_test.sh configs/riskprop_nexar_mtta.py \
-  work_dirs/riskprop_nexar_full/epoch_20.pth 2
+CUDA_VISIBLE_DEVICES=0,1 PORT=29517 conda run -n riskprop \
+  bash tools/dist_test.sh configs/riskprop_nexar.py \
+  work_dirs/riskprop_nexar_l40_full/best_mAUC_full@_epoch_12.pth \
+  2 \
+  --work-dir work_dirs/riskprop_nexar_test_full
 ```
 
-This is a separate inference/evaluation path; it does not change the training
-config or checkpoint and does not use test labels for training or checkpoint
-selection. Use the test labels only when the local Nexar metadata provides
-them; an official server that withholds labels cannot provide test mTTA.
+The full-timeline pass uses causal 5-frame windows ending every 0.1 seconds.
+At FAR 0.1 the report includes `mtta` (all positive videos; censored positives
+contribute zero) and `mtta_evaluable` (excludes positives whose onset is beyond
+the observed clip; observable misses still contribute zero), plus positive,
+evaluable, censored, and negative counts and the maximum empirical FAR. The
+local Nexar metadata supplies the labels and clip-relative onset/event times;
+an evaluation server that withholds these labels cannot provide test mTTA.
 
 Check that the selected GPU is available before running. The full-data config points at this prepared dataset and uses the repository's `nexar_val` split.
 
@@ -95,9 +88,9 @@ CUDA_VISIBLE_DEVICES=0,1 PORT=29518 conda run -n riskprop \
   --work-dir work_dirs/riskprop_nexar_full
 ```
 
-Score a full Nexar test submission on Public, Private, and the complete test
-set. The overall mAP averages AP across the three horizon groups over all test
-videos; the solution defaults to `../datasets/Nexar/solution.csv`.
+To score an already-created Nexar submission CSV without running model
+inference, use the lightweight scorer below. For checkpoint evaluation, use
+the combined runner above so mTTA is generated as well.
 
 ```bash
 conda run -n riskprop python tools/analysis_tools/evaluate_nexar_submission.py \

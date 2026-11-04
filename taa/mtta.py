@@ -59,30 +59,40 @@ def calculate_mtta(
     censored_positive_count = len(positive_indices) - len(evaluable_positive_indices)
 
     thresholds = np.sort(negative_scores)[::-1]
-    tta_per_threshold: List[float] = []
-    tta_evaluable_per_threshold: List[float] = []
-    for threshold in thresholds:
-        video_ttas = []
-        evaluable_video_ttas = []
-        for index in positive_indices:
-            valid = (
-                (times[index] >= float(onset_times_sec[index]) - TIMESTAMP_TOLERANCE_SEC)
-                & (times[index] <= float(event_times_sec[index]) + TIMESTAMP_TOLERANCE_SEC)
-                & (scores[index] >= threshold)
-            )
-            alarm_indices = np.flatnonzero(valid)
-            tta = (
-                float(event_times_sec[index] - times[index][alarm_indices[0]])
-                if alarm_indices.size
-                else 0.0
-            )
-            tta = max(tta, 0.0)
-            video_ttas.append(tta)
-            if index in evaluable_positive_set:
-                evaluable_video_ttas.append(tta)
-        tta_per_threshold.append(float(np.mean(video_ttas)))
-        if evaluable_video_ttas:
-            tta_evaluable_per_threshold.append(float(np.mean(evaluable_video_ttas)))
+    # For a positive video, the first alarm at a threshold is the first time
+    # the running maximum score reaches that threshold. Search the monotonic
+    # running maximum for all thresholds at once. This avoids a Python loop
+    # over every negative frame threshold (which can be tens of thousands on
+    # full-timeline test data).
+    tta_totals = np.zeros(thresholds.size, dtype=np.float64)
+    tta_evaluable_totals = np.zeros(thresholds.size, dtype=np.float64)
+    for index in positive_indices:
+        valid = (
+            (times[index] >= float(onset_times_sec[index]) - TIMESTAMP_TOLERANCE_SEC)
+            & (times[index] <= float(event_times_sec[index]) + TIMESTAMP_TOLERANCE_SEC)
+        )
+        window_indices = np.flatnonzero(valid)
+        if window_indices.size == 0:
+            continue
+
+        running_max = np.maximum.accumulate(scores[index][window_indices])
+        first_alarm_positions = np.searchsorted(running_max, thresholds, side="left")
+        has_alarm = first_alarm_positions < window_indices.size
+        video_ttas = np.zeros(thresholds.size, dtype=np.float64)
+        alarm_times = times[index][window_indices[first_alarm_positions[has_alarm]]]
+        video_ttas[has_alarm] = np.maximum(
+            float(event_times_sec[index]) - alarm_times, 0.0
+        )
+        tta_totals += video_ttas
+        if index in evaluable_positive_set:
+            tta_evaluable_totals += video_ttas
+
+    tta_per_threshold = (tta_totals / len(positive_indices)).tolist()
+    tta_evaluable_per_threshold = (
+        (tta_evaluable_totals / len(evaluable_positive_indices)).tolist()
+        if evaluable_positive_indices
+        else []
+    )
 
     # Match the official code's index-based FAR cutoff, including its floor.
     # Full-size Nexar has enough negative frames that this is non-zero.
