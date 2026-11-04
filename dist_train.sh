@@ -1,13 +1,10 @@
-name=predict_anomaly_snippet
-#name=CAP_config
+#!/usr/bin/env bash
+set -euo pipefail
 
-current_datetime=$(date +"%Y%m%d_%H%M%S")
-mkdir -p codes/$name/$current_datetime
+CONFIG=${1:-configs/predict_anomaly_snippet.py}
+GPUS=${2:-1}
+PORT=${PORT:-29500}
+shift $(( $# > 1 ? 2 : $# ))
+export PORT
 
-# cp -r taa codes/$name/$current_datetime
-find taa -name "*.py" -exec cp --parents {} codes/$name/$current_datetime/ \;
-
-# cp -r configs codes/$name/$current_datetime
-find configs -name $name.py -exec cp --parents {} codes/$name/$current_datetime/ \;
-
-CUDA_VISIBLE_DEVICES=2,3,4,5,6,7 PORT=29502 tools/dist_train.sh configs/$name.py 6
+exec "$(dirname "$0")/tools/dist_train.sh" "${CONFIG}" "${GPUS}" "$@"

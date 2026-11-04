@@ -41,15 +41,18 @@ class SampleFramesBeforeAccident(BaseTransform):
                 to the next transform in pipeline.
         """
         total_frames = results["total_frames"]
-        assert results["fps"] in [30, 20, 10]
-        frame_interval = results["fps"] // 10
+        fps = float(results["fps"])
+        if fps < 10:
+            raise ValueError("Sampling at 10 fps requires source video fps >= 10, got {}".format(fps))
+        frame_interval = max(1, int(round(fps / 10)))
 
         accident_frame = results["accident_frame"]
         start_index = results["start_index"]
 
         clip_inds = np.concatenate(np.arange(self.num_clips)[:, None] + np.arange(self.clip_len)[None, :])
-        clip_inds *= frame_interval
+        clip_inds = np.rint(clip_inds * fps / 10).astype(np.int32)
         clip_inds_max = clip_inds[-1]
+        three_second_span = int(round(fps * 3))
 
         if self.test_mode:
             if results["target"] is True:
@@ -64,12 +67,12 @@ class SampleFramesBeforeAccident(BaseTransform):
                         # The last frame of the clip is the last frame of the video
                         clip_inds += total_frames - 1 - clip_inds_max
                 else:
-                    if accident_frame - start_index - frame_interval * 30 > clip_inds_max:
+                    if accident_frame - start_index - three_second_span > clip_inds_max:
                         # The first frame of the clip is the first frame of the video
                         clip_inds += 0
                     else:
                         # The last frame of the clip is 3s before the accident frame
-                        clip_inds += accident_frame - start_index - frame_interval * 30 - clip_inds_max
+                        clip_inds += accident_frame - start_index - three_second_span - clip_inds_max
             elif results["target"] is None:
                 # The last frame of the clip is the last frame of the video
                 clip_inds += total_frames - 1 - clip_inds_max
@@ -84,10 +87,10 @@ class SampleFramesBeforeAccident(BaseTransform):
                     else:
                         clip_inds += total_frames - 1 - clip_inds_max
                 else:
-                    if accident_frame - start_index - frame_interval * 30 > clip_inds_max:
-                        clip_inds += np.random.randint(0, accident_frame - start_index - frame_interval * 30 - clip_inds_max)
+                    if accident_frame - start_index - three_second_span > clip_inds_max:
+                        clip_inds += np.random.randint(0, accident_frame - start_index - three_second_span - clip_inds_max)
                     else:
-                        clip_inds += accident_frame - start_index - frame_interval * 30 - clip_inds_max
+                        clip_inds += accident_frame - start_index - three_second_span - clip_inds_max
 
         frame_inds = np.maximum(clip_inds, 0) + start_index
 

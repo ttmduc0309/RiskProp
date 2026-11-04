@@ -22,12 +22,13 @@ from .utils import (
 
 @METRICS.register_module()
 class AnticipationMetric(BaseMetric):
-    def __init__(self, fpr_max: float = 0.1, vis_list=[], output_dir=None) -> None:
+    def __init__(self, fpr_max: float = 0.1, vis_list=[], output_dir=None, prediction_file=None) -> None:
         super().__init__()
 
         self.fpr_max = fpr_max
         self.vis_list = vis_list
         self.output_dir = output_dir
+        self.prediction_file = prediction_file
         self.epoch = None
 
     def process(self, data_batch: Sequence[Tuple[Any, Dict]], data_samples: Sequence[Dict]) -> None:
@@ -95,6 +96,10 @@ class AnticipationMetric(BaseMetric):
             id=[x["video_id"] for x in results if x["is_test"]],
             target=[f'{np.max(x["pred"][-1]):.4f}' for x in results if x["is_test"]],
         )
+        if self.prediction_file and data["id"]:
+            prediction_path = os.path.abspath(self.prediction_file)
+            os.makedirs(os.path.dirname(prediction_path), exist_ok=True)
+            pd.DataFrame(data).to_csv(prediction_path, index=False)
 
         vis_results=[]
         for result in results:
