@@ -165,3 +165,9 @@ codes
 visualizations
 outputs
 .gitignore
+
+# Local Nexar dataset links/annotations and generated training artifacts
+/data/nexar-collision-prediction/
+/work_dirs/
+*.pth
+*.log
