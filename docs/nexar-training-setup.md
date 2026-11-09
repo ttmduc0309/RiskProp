@@ -22,7 +22,7 @@ The commands use `conda-forge` without accepting or changing Anaconda channel te
 
 ## Nexar preparation
 
-The converter uses Nexar's existing MP4 files directly. It creates `annotations.csv` and relative symbolic links under `data/nexar-collision-prediction/{train,test}`; it does not extract or recompress the videos. Each annotation stores the video's decoded frame count, actual average FPS, the alert frame, and the event frame. Sampling converts that source frame rate to approximately 10 samples per second, including for variable rates such as 30.5 FPS.
+The converter uses Nexar's existing MP4 files directly. It creates `annotations.csv` and relative symbolic links under `data/nexar-collision-prediction/{train,test}`; it does not extract or recompress the videos. Annotations store decoded frame count, actual average FPS, training alert/event frames, and test labels plus clip-relative alert/event times in seconds. Sampling converts source FPS to approximately 10 samples per second, including variable rates such as 30.5 FPS.
 
 ```bash
 conda run -n riskprop python tools/prepare_nexar.py \
@@ -53,6 +53,31 @@ CUDA_VISIBLE_DEVICES=0,1 PORT=29517 conda run -n riskprop \
   work_dirs/riskprop_nexar_smoke_l40/epoch_1.pth 2
 ```
 
+## Full Nexar test evaluation: mAP and mTTA
+
+For full Nexar test evaluation, use the existing distributed test script with
+`configs/riskprop_nexar.py`. It now runs the standard Nexar submission
+benchmark for Public/Private/All mAP and then full-timeline inference for
+timestamp-based mTTA. It writes both metric groups to one `test_results.json`
+and one `test_benchmark_report.md`, and keeps the submission CSV and temporal
+prediction JSONL under the same work directory.
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 PORT=29517 conda run -n riskprop \
+  bash tools/dist_test.sh configs/riskprop_nexar.py \
+  work_dirs/riskprop_nexar_l40_full/best_mAUC_full@_epoch_12.pth \
+  2 \
+  --work-dir work_dirs/riskprop_nexar_test_full
+```
+
+The full-timeline pass uses causal 5-frame windows ending every 0.1 seconds.
+At FAR 0.1 the report emits one `mtta` value, averaging over all positive
+videos. A positive video with no observable post-onset alarm—including a clip
+whose onset is beyond its last frame—contributes zero, matching TOP's
+zero-for-miss convention. The local Nexar metadata supplies labels and
+clip-relative onset/event times; an evaluation server that withholds these
+labels cannot provide test mTTA.
+
 Check that the selected GPU is available before running. The full-data config points at this prepared dataset and uses the repository's `nexar_val` split.
 
 The full-data config is ready to launch with:
@@ -61,6 +86,15 @@ The full-data config is ready to launch with:
 CUDA_VISIBLE_DEVICES=0,1 PORT=29518 conda run -n riskprop \
   bash tools/dist_train.sh configs/riskprop_nexar.py 2 \
   --work-dir work_dirs/riskprop_nexar_full
+```
+
+To score an already-created Nexar submission CSV without running model
+inference, use the lightweight scorer below. For checkpoint evaluation, use
+the combined runner above so mTTA is generated as well.
+
+```bash
+conda run -n riskprop python tools/analysis_tools/evaluate_nexar_submission.py \
+  work_dirs/riskprop_full_nexar_20261101/nexar_test_submission.csv
 ```
 
 ## Scope and reproduction limitations

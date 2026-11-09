@@ -135,6 +135,12 @@ work_dirs/
 /projects/*/data
 .DS_Store
 
+# Local Nexar dataset links/annotations and generated training artifacts
+/data/nexar-collision-prediction/
+/work_dirs/
+*.pth
+*.log
+
 # Pytorch
 *.pth
 
@@ -165,9 +171,3 @@ codes
 visualizations
 outputs
 .gitignore
-
-# Local Nexar dataset links/annotations and generated training artifacts
-/data/nexar-collision-prediction/
-/work_dirs/
-*.pth
-*.log

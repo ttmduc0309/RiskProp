@@ -92,7 +92,7 @@ tools/dist_test.sh configs/predict_anomaly_snippet.py <checkpoint>.pth 8 \
   --dump outputs/predictions.pkl
 ```
 
-Checkpoints and logs are saved to `work_dirs/<config_name>/`. The default best-checkpoint criterion is `mAUC@`.
+Checkpoints and logs are saved to `work_dirs/<config_name>/`. The default best-checkpoint criterion is `mAUC_full@` (full AUC on validation).
 
 ## Config Overview
 
@@ -107,8 +107,9 @@ Checkpoints and logs are saved to `work_dirs/<config_name>/`. The default best-c
 
 | Metric | Description |
 | --- | --- |
-| `mAUC@` | Mean partial AUC with `FPR <= 0.1` at `0.5s`, `1.0s`, and `1.5s` before the accident |
-| `mAUC` | Mean full-curve AUC at `0.5s`, `1.0s`, and `1.5s` |
+| `mAUC_fpr_0.1_std@` | Mean standardized partial AUC from scikit-learn at `FPR <= 0.1` across `0.5s`, `1.0s`, and `1.5s` |
+| `mAUC_fpr_0.1_norm@` | Mean raw ROC area up to `FPR = 0.1`, divided by `0.1`, across `0.5s`, `1.0s`, and `1.5s` |
+| `mAUC_full@` | Mean full-curve AUC on validation at `0.5s`, `1.0s`, and `1.5s` |
 | `mAP` | Mean Average Precision at `0.5s`, `1.0s`, and `1.5s` |
 | `mTTA@0.1` | Mean Time-To-Accident at `FPR <= 0.1` |
 

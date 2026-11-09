@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 import copy
+import json
 import numpy as np
 import pandas as pd
 from typing import Any, Dict, List, Sequence, Tuple
@@ -10,6 +11,7 @@ from mmengine import dump
 
 from mmaction.registry import METRICS
 
+from sklearn.metrics import auc as sklearn_auc
 from sklearn.metrics import average_precision_score,roc_auc_score,roc_curve
 from .utils import (
     visualize_pred_score,
@@ -18,17 +20,28 @@ from .utils import (
     plot_tta_curves_from_csvs,
     plot_mean_accident_aligned_curve_from_results,
 )
+from .mtta import calculate_mtta
 
 
 @METRICS.register_module()
 class AnticipationMetric(BaseMetric):
-    def __init__(self, fpr_max: float = 0.1, vis_list=[], output_dir=None, prediction_file=None) -> None:
+    def __init__(
+        self,
+        fpr_max: float = 0.1,
+        vis_list=[],
+        output_dir=None,
+        prediction_file=None,
+        temporal_prediction_file=None,
+        compute_test_mtta: bool = False,
+    ) -> None:
         super().__init__()
 
         self.fpr_max = fpr_max
         self.vis_list = vis_list
         self.output_dir = output_dir
         self.prediction_file = prediction_file
+        self.temporal_prediction_file = temporal_prediction_file
+        self.compute_test_mtta = compute_test_mtta
         self.epoch = None
 
     def process(self, data_batch: Sequence[Tuple[Any, Dict]], data_samples: Sequence[Dict]) -> None:
@@ -45,7 +58,7 @@ class AnticipationMetric(BaseMetric):
             result = dict()
             result["pred"] = data_sample["pred_score"].cpu().numpy()
             result["target"] = data_sample["target"]
-            if data_sample["target"] is True:
+            if data_sample["target"] is True and not data_sample["is_test"]:
                 abnormal_start_ind = np.where(data_sample["frame_inds"] >= data_sample["abnormal_start_frame"])[0]
                 result["abnormal_start_ind"] = abnormal_start_ind[0] if abnormal_start_ind.size > 0 else 0
                 accident_ind = np.where(data_sample["frame_inds"] >= data_sample["accident_frame"])[0]
@@ -63,6 +76,12 @@ class AnticipationMetric(BaseMetric):
             result["accident_frame"] = data_sample["accident_frame"]
             result["is_val"] = data_sample["is_val"]
             result["is_test"] = data_sample["is_test"]
+            for key in ("frame_timestamps_sec", "onset_time_sec", "event_time_sec", "test_partition"):
+                if key in data_sample:
+                    value = data_sample[key]
+                    if hasattr(value, "cpu"):
+                        value = value.cpu().numpy()
+                    result[key] = value
             self.results.append(result)
 
     def compute_metrics(self, results: List) -> Dict:
@@ -100,6 +119,71 @@ class AnticipationMetric(BaseMetric):
             prediction_path = os.path.abspath(self.prediction_file)
             os.makedirs(os.path.dirname(prediction_path), exist_ok=True)
             pd.DataFrame(data).to_csv(prediction_path, index=False)
+
+        test_results = [x for x in results if x["is_test"]]
+        if self.temporal_prediction_file and test_results:
+            temporal_path = os.path.abspath(self.temporal_prediction_file)
+            os.makedirs(os.path.dirname(temporal_path), exist_ok=True)
+            with open(temporal_path, "w", encoding="utf-8") as stream:
+                for result in test_results:
+                    record = {
+                        "video_id": result["video_id"],
+                        "target": result["target"],
+                        "scores": np.asarray(result["pred"]).reshape(-1).tolist(),
+                        "timestamps_sec": np.asarray(result.get("frame_timestamps_sec", [])).reshape(-1).tolist(),
+                        "onset_time_sec": result.get("onset_time_sec"),
+                        "event_time_sec": result.get("event_time_sec"),
+                        "test_partition": result.get("test_partition"),
+                    }
+                    stream.write(json.dumps(record, allow_nan=False) + "\n")
+
+        if self.compute_test_mtta and test_results:
+            if any(
+                result["target"] is None
+                or result.get("frame_timestamps_sec") is None
+                for result in test_results
+            ):
+                raise ValueError(
+                    "Test mTTA requires labels, onset/event timestamps, and full-video frame timestamps; "
+                    "prepare enriched Nexar annotations and use SampleFullVideoCausalFrames."
+                )
+            if any(
+                result["target"]
+                and (
+                    result.get("onset_time_sec") is None
+                    or result.get("event_time_sec") is None
+                )
+                for result in test_results
+            ):
+                raise ValueError(
+                    "Test mTTA requires onset and event timestamps for every positive video."
+                )
+            test_scores = []
+            for result in test_results:
+                score = np.asarray(result["pred"])
+                if score.ndim > 1:
+                    score = np.max(score, axis=-1)
+                test_scores.append(score.reshape(-1))
+            mtta_result = calculate_mtta(
+                predictions=test_scores,
+                timestamps_sec=[np.asarray(x["frame_timestamps_sec"]).reshape(-1) for x in test_results],
+                targets=[bool(x["target"]) for x in test_results],
+                # Nexar negatives intentionally have no onset/event labels.
+                # The metric only reads these values for positive videos.
+                onset_times_sec=[
+                    float(x["onset_time_sec"]) if x["target"] else 0.0
+                    for x in test_results
+                ],
+                event_times_sec=[
+                    float(x["event_time_sec"]) if x["target"] else 0.0
+                    for x in test_results
+                ],
+                far_max=self.fpr_max,
+            )
+            eval_results[f"mtta_test@{self.fpr_max:g}"] = mtta_result["mtta"]
+            eval_results["mtta_test_num_positive"] = mtta_result["num_positive_videos"]
+            eval_results["mtta_test_num_negative"] = mtta_result["num_negative_videos"]
+            eval_results["mtta_test_max_empirical_far"] = max(mtta_result["empirical_far"])
 
         vis_results=[]
         for result in results:
@@ -147,16 +231,21 @@ class AnticipationMetric(BaseMetric):
         if len(preds[0].shape) > 1:
             preds = [np.max(pred, axis=-1) for pred in preds]
 
-        preds_n = -np.sort(-np.concatenate([pred for pred, label in zip(preds, labels) if not label]))
-        eval_results[f"threshold{sep}{self.fpr_max:.2f}"] = preds_n[int(len(preds_n) * self.fpr_max)]
-
-
-        ttas = [
-            (j - i - np.argmax(pred[i : j + 1, None] >= preds_n, axis=0)) / 10 * np.any(pred[i : j + 1, None] >= preds_n, axis=0)
-            for pred, label, i, j in zip(preds, labels, abnormal_start_inds, accident_inds)
-            if label
+        mtta_result = calculate_mtta(
+            predictions=preds,
+            timestamps_sec=[np.arange(len(pred), dtype=np.float64) / 10.0 for pred in preds],
+            targets=[bool(label) for label in labels],
+            onset_times_sec=[float(index) / 10.0 for index in abnormal_start_inds],
+            event_times_sec=[float(index) / 10.0 for index in accident_inds],
+            far_max=self.fpr_max,
+        )
+        threshold_scores = np.sort(
+            np.concatenate([pred for pred, label in zip(preds, labels) if not label])
+        )[::-1]
+        eval_results[f"threshold{sep}{self.fpr_max:.2f}"] = threshold_scores[
+            int(len(threshold_scores) * self.fpr_max)
         ]
-        ttas = np.array(ttas).mean(axis=0)
+        ttas = np.asarray(mtta_result["tta_by_threshold_all"])
         eval_results[f"tta{sep}0.01"] = ttas[int(len(ttas) * 0.01)]
         eval_results[f"tta{sep}0.05"] = ttas[int(len(ttas) * 0.05)]
         eval_results[f"tta{sep}0.1"] = ttas[int(len(ttas) * self.fpr_max)]
@@ -169,19 +258,35 @@ class AnticipationMetric(BaseMetric):
         preds_15 = [np.max(pred[-20:-15]) for pred, label in zip(preds, labels) if label]
         preds_n = [np.max(pred[-5:]) for pred, label in zip(preds, labels) if not label]
         y = [1] * len(preds_0) + [0] * len(preds_n)
-        eval_results[f"AUC{sep}0.0s"], fpr_0, tpr_0 = auc(np.array(y), np.array(preds_0 + preds_n), self.fpr_max)
-        eval_results[f"AUC{sep}0.5s"], fpr_5, tpr_5 = auc(np.array(y), np.array(preds_5 + preds_n), self.fpr_max)
-        eval_results[f"AUC{sep}1.0s"], fpr_10, tpr_10 = auc(np.array(y), np.array(preds_10 + preds_n), self.fpr_max)
-        eval_results[f"AUC{sep}1.5s"], fpr_15, tpr_15 = auc(np.array(y), np.array(preds_15 + preds_n), self.fpr_max)
-        eval_results[f"mAUC{sep}0.1"] = (
-            eval_results[f"AUC{sep}0.5s"] + eval_results[f"AUC{sep}1.0s"] + eval_results[f"AUC{sep}1.5s"]
+        fpr_name = "{:g}".format(self.fpr_max)
+        eval_results[f"AUC_fpr_{fpr_name}_std{sep}0.0s"], fpr_0, tpr_0 = auc(np.array(y), np.array(preds_0 + preds_n), self.fpr_max)
+        eval_results[f"AUC_fpr_{fpr_name}_std{sep}0.5s"], fpr_5, tpr_5 = auc(np.array(y), np.array(preds_5 + preds_n), self.fpr_max)
+        eval_results[f"AUC_fpr_{fpr_name}_std{sep}1.0s"], fpr_10, tpr_10 = auc(np.array(y), np.array(preds_10 + preds_n), self.fpr_max)
+        eval_results[f"AUC_fpr_{fpr_name}_std{sep}1.5s"], fpr_15, tpr_15 = auc(np.array(y), np.array(preds_15 + preds_n), self.fpr_max)
+        eval_results[f"mAUC_fpr_{fpr_name}_std{sep}"] = (
+            eval_results[f"AUC_fpr_{fpr_name}_std{sep}0.5s"] + eval_results[f"AUC_fpr_{fpr_name}_std{sep}1.0s"] + eval_results[f"AUC_fpr_{fpr_name}_std{sep}1.5s"]
+        ) / 3
+        eval_results[f"AUC_fpr_{fpr_name}_norm{sep}0.0s"] = normalized_partial_auc(
+            np.array(y), np.array(preds_0 + preds_n), self.fpr_max
+        )
+        eval_results[f"AUC_fpr_{fpr_name}_norm{sep}0.5s"] = normalized_partial_auc(
+            np.array(y), np.array(preds_5 + preds_n), self.fpr_max
+        )
+        eval_results[f"AUC_fpr_{fpr_name}_norm{sep}1.0s"] = normalized_partial_auc(
+            np.array(y), np.array(preds_10 + preds_n), self.fpr_max
+        )
+        eval_results[f"AUC_fpr_{fpr_name}_norm{sep}1.5s"] = normalized_partial_auc(
+            np.array(y), np.array(preds_15 + preds_n), self.fpr_max
+        )
+        eval_results[f"mAUC_fpr_{fpr_name}_norm{sep}"] = (
+            eval_results[f"AUC_fpr_{fpr_name}_norm{sep}0.5s"] + eval_results[f"AUC_fpr_{fpr_name}_norm{sep}1.0s"] + eval_results[f"AUC_fpr_{fpr_name}_norm{sep}1.5s"]
         ) / 3
 
         eval_results[f"AUC_full{sep}0.0s"], fpr_0, tpr_0 = auc(np.array(y), np.array(preds_0 + preds_n), 1)
         eval_results[f"AUC_full{sep}0.5s"], fpr_5, tpr_5 = auc(np.array(y), np.array(preds_5 + preds_n), 1)
         eval_results[f"AUC_full{sep}1.0s"], fpr_10, tpr_10 = auc(np.array(y), np.array(preds_10 + preds_n), 1)
         eval_results[f"AUC_full{sep}1.5s"], fpr_15, tpr_15 = auc(np.array(y), np.array(preds_15 + preds_n), 1)
-        eval_results[f"mAUC{sep}"] = (
+        eval_results[f"mAUC_full{sep}"] = (
             eval_results[f"AUC_full{sep}0.5s"] + eval_results[f"AUC_full{sep}1.0s"] + eval_results[f"AUC_full{sep}1.5s"]
         ) / 3
 
@@ -201,3 +306,16 @@ def auc(y_true, y_scores, fpr_max=0.1):
     score = roc_auc_score(y_true, y_scores, max_fpr=fpr_max)
     fpr, tpr, _ = roc_curve(y_true, y_scores)
     return score, fpr, tpr
+
+
+def normalized_partial_auc(y_true, y_scores, fpr_max=0.1):
+    """Return raw ROC area up to ``fpr_max``, divided by ``fpr_max``."""
+    fpr, tpr, _ = roc_curve(y_true, y_scores)
+    stop = np.searchsorted(fpr, fpr_max, side="right")
+    partial_fpr = fpr[:stop]
+    partial_tpr = tpr[:stop]
+    if partial_fpr.size == 0 or partial_fpr[-1] < fpr_max:
+        boundary_tpr = np.interp(fpr_max, fpr, tpr)
+        partial_fpr = np.append(partial_fpr, fpr_max)
+        partial_tpr = np.append(partial_tpr, boundary_tpr)
+    return sklearn_auc(partial_fpr, partial_tpr) / fpr_max

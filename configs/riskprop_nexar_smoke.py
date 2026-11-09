@@ -81,7 +81,7 @@ test_evaluator = val_evaluator
 
 train_cfg = dict(type="EpochBasedTrainLoop", max_epochs=1, val_begin=1, val_interval=1)
 default_hooks = dict(
-    checkpoint=dict(type="CheckpointHook", interval=1, max_keep_ckpts=2, save_best="mAUC@", rule="greater")
+    checkpoint=dict(type="CheckpointHook", interval=1, max_keep_ckpts=2, save_best="mAUC_full@", rule="greater")
 )
 custom_hooks = [dict(type="EpochHook"), dict(type="AnticipationMetricHook")]
 work_dir = "work_dirs/riskprop_nexar_smoke"

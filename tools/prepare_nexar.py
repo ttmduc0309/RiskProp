@@ -19,6 +19,9 @@ FIELDS = [
     "abnormal_start_frame",
     "accident_frame",
     "target",
+    "onset_time_sec",
+    "event_time_sec",
+    "test_partition",
 ]
 
 
@@ -54,7 +57,13 @@ def _read_metadata(path: Path) -> Iterable[Dict[str, str]]:
 
 
 def _record(
-    row: Dict[str, str], source: Path, output_root: Path, split: str, label: int, is_test: int
+    row: Dict[str, str],
+    source: Path,
+    output_root: Path,
+    split: str,
+    label: int,
+    is_test: int,
+    test_partition: str = "",
 ) -> List[object]:
     video_id = Path(row["file_name"]).stem.zfill(5)
     if not video_id.isdigit():
@@ -67,10 +76,36 @@ def _record(
 
     alert = row.get("time_of_alert") or ""
     event = row.get("time_of_event") or ""
-    alert_frame = _frame_at(alert, fps, total_frames) if label and alert else ""
-    event_frame = _frame_at(event, fps, total_frames) if label and event else ""
-    target = "" if is_test else label
-    return [video_id, is_test, total_frames, "{:.6f}".format(fps), alert_frame, event_frame, target]
+    if is_test and label:
+        time_to_accident = row.get("time_to_accident") or ""
+        if not alert or not event or not time_to_accident:
+            raise ValueError("Positive test metadata needs alert, event, and time-to-accident: {}".format(video_id))
+        duration_sec = (total_frames - 1) / fps
+        time_to_accident_sec = float(time_to_accident)
+        event_time_sec = duration_sec + time_to_accident_sec
+        clip_start_time = float(event) - time_to_accident_sec - duration_sec
+        onset_time_sec = float(alert) - clip_start_time
+        # Keep the original timestamps in seconds: test events can occur after
+        # the final observed frame and must not be clamped into the video.
+        alert_frame = ""
+        event_frame = ""
+    else:
+        alert_frame = _frame_at(alert, fps, total_frames) if label and alert else ""
+        event_frame = _frame_at(event, fps, total_frames) if label and event else ""
+        onset_time_sec = float(alert_frame) / fps if alert_frame != "" else ""
+        event_time_sec = float(event_frame) / fps if event_frame != "" else ""
+    return [
+        video_id,
+        is_test,
+        total_frames,
+        "{:.6f}".format(fps),
+        alert_frame,
+        event_frame,
+        label,
+        "{:.6f}".format(onset_time_sec) if onset_time_sec != "" else "",
+        "{:.6f}".format(event_time_sec) if event_time_sec != "" else "",
+        test_partition,
+    ]
 
 
 def prepare(source_root: Path, output_root: Path) -> Dict[str, int]:
@@ -91,7 +126,15 @@ def prepare(source_root: Path, output_root: Path) -> Dict[str, int]:
     for subset in ("test-public", "test-private"):
         for category, label in (("positive", 1), ("negative", 0)):
             for row in _read_metadata(source_root / subset / category / "metadata.csv"):
-                record = _record(row, source_root / subset / category, output_root, "test", label, 1)
+                record = _record(
+                    row,
+                    source_root / subset / category,
+                    output_root,
+                    "test",
+                    label,
+                    1,
+                    test_partition=subset.replace("test-", "", 1).capitalize(),
+                )
                 key = ("test", record[0])
                 if key in seen:
                     raise ValueError("Duplicate Nexar test video id across subsets: {}".format(record[0]))

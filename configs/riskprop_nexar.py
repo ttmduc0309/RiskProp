@@ -21,9 +21,9 @@ test_dataloader = dict(
     dataset=dict(video_ids=None, include_test=True),
 )
 
-train_cfg = dict(type="EpochBasedTrainLoop", max_epochs=50, val_begin=10, val_interval=10)
+train_cfg = dict(type="EpochBasedTrainLoop", max_epochs=50, val_begin=1, val_interval=1)
 default_hooks = dict(
-    checkpoint=dict(interval=1, max_keep_ckpts=50, save_best="mAUC@", rule="greater")
+    checkpoint=dict(interval=10, max_keep_ckpts=50, save_best="mAUC_full@", rule="greater")
 )
 val_evaluator = dict(prediction_file=None)
 test_evaluator = dict(prediction_file="work_dirs/riskprop_nexar_full/test_predictions.csv")

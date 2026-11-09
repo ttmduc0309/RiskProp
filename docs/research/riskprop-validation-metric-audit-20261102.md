@@ -4,6 +4,10 @@ Date: 2026-11-02
 
 ## Summary
 
+**Historical snapshot:** this audit records the metric names and behavior before the `improve-checkpoint` branch renamed the implementation keys. The paper-protocol discrepancies discussed below remain relevant; only the metric names and selection-key spelling were changed.
+
+The `compare_formula` branch now reports both `mAUC_fpr_0.1_std` (scikit-learn standardized partial AUC) and `mAUC_fpr_0.1_norm` (trapezoidal ROC area through FPR 0.1 divided by 0.1). The latter is a comparison candidate, not a verified paper-exact formula: the cited TOP equation shows raw partial area, while published values exceed the raw area's maximum of 0.1, indicating that a scale/normalization detail is omitted or differs.
+
 The RiskProp paper reports evaluation metrics, but does not document a separate validation split, a validation schedule, or which metric was used to select the final checkpoint. It explicitly says that mTTA is a compatibility metric and is not used for training. The public repository's generic config selects `mAUC@`, but the metric implementation defines `mAUC@` as *unconstrained full AUC*, whereas the paper's primary AUC is constrained at FAR <= 0.1 (`mAUC@0.1` in this code). This is evidence about the released generic config, not evidence that the authors selected the paper's model that way.
 
 The paper reports constrained AUC at FAR <= 0.1, full mAUC, mAP, and constrained mTTA, based on Nexar's evaluation protocol. In the current local evaluator, `AnticipationMetric` computes mAP using unrestricted scikit-learn `average_precision_score`; this appears inconsistent with the paper's statement that AP is computed under FAR <= 0.1. In addition, the local best-checkpoint key `mAUC@` selects full, unconstrained AUC, not the paper's primary constrained AUC. These are concrete candidates for the user's concern that validation metrics do not match the paper. A separate protocol comparison is needed before treating any local metric as paper-equivalent.
