@@ -125,15 +125,8 @@ annotated alert moment.
 
 ## Local implementation note
 
-The local evaluator now returns two test metrics:
-
-- `mtta_test@0.1`: reference-code-compatible; a positive with no valid alarm,
-  including a censored onset, contributes zero.
-- `mtta_test_evaluable@0.1`: excludes only positive clips whose onset is beyond
-  the final observed timestamp. Missed alarms on observable clips still
-  contribute zero. The metric is omitted when there are no evaluable positives.
-
-It also reports the total, evaluable, and censored positive counts. This keeps
-the code-compatible scalar available while making the censored population
-visible. The evaluable-only result is supplementary and should not be presented
-as directly paper-comparable.
+Historical note: the first local implementation returned both an all-positive
+and an evaluable-only mTTA. As of 2026-11-09, the evaluator emits only
+`mtta_test@0.1`, includes every positive in the denominator, and assigns zero
+when no valid post-onset alarm is observable. This follows TOP's
+zero-for-miss convention and avoids a separate censoring-based metric.
