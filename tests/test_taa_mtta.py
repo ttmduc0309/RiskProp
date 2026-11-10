@@ -387,19 +387,26 @@ class TestNexarMTTA(unittest.TestCase):
                 }
             )
 
-    def test_validation_sampler_rejects_fps_not_supported_by_public_sampler(self):
+    def test_validation_sampler_handles_fractional_fps(self):
         sampler = SampleFramesBeforeAccident(clip_len=5, num_clips=10, test_mode=True)
-        with self.assertRaises(AssertionError):
-            sampler.transform(
-                {
-                    "total_frames": 100,
-                    "fps": 25.0,
-                    "start_index": 0,
-                    "target": False,
-                    "accident_frame": None,
-                    "is_test": False,
-                }
-            )
+        offsets = np.concatenate(np.arange(10)[:, None] + np.arange(5)[None, :])
+        for fps in (23.6, 25.0, 29.9, 30.5, 30.6):
+            with self.subTest(fps=fps):
+                base = np.rint(offsets * fps / 10).astype(np.int32)
+                common = {"total_frames": 500, "fps": fps, "start_index": 1, "is_test": False}
+                positive = sampler.transform({**common, "target": True, "accident_frame": 301})
+                negative = sampler.transform({**common, "target": False, "accident_frame": None})
+                np.testing.assert_array_equal(positive["frame_inds"], base + 301 - base[-1])
+                np.testing.assert_array_equal(negative["frame_inds"], base + 1)
+                self.assertEqual(positive["frame_inds"][-1], 301)
+                self.assertLessEqual(np.max(np.abs(base - offsets * fps / 10)), 0.5)
+
+    def test_validation_sampler_rejects_invalid_fps(self):
+        sampler = SampleFramesBeforeAccident(clip_len=5, num_clips=10, test_mode=True)
+        for fps in (0, 9.9, float("nan"), float("inf")):
+            with self.subTest(fps=fps), self.assertRaises(ValueError):
+                sampler.transform({"total_frames": 100, "fps": fps, "start_index": 0,
+                                   "target": False, "accident_frame": None, "is_test": False})
 
     def test_evaluator_reports_test_mtta_and_writes_temporal_predictions(self):
         with tempfile.TemporaryDirectory() as temp_dir:

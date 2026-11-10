@@ -43,31 +43,24 @@ class SampleFramesBeforeAccident(BaseTransform):
         total_frames = results["total_frames"]
         fps = float(results["fps"])
         is_submission_test = self.test_mode and results.get("is_test", False)
-        if self.test_mode and not is_submission_test:
-            assert fps in [30, 20, 10]
-        elif fps < 10:
-            raise ValueError("Sampling at 10 fps requires source video fps >= 10, got {}".format(fps))
+        if not np.isfinite(fps) or fps < 10:
+            raise ValueError("Sampling at 10 fps requires finite source video fps >= 10, got {}".format(fps))
         # TOP treats Nexar videos as 30 FPS when constructing its submission
         # windows, even when annotation metadata has a slightly different FPS.
         sampling_fps = 30.0 if is_submission_test else fps
-        if self.test_mode:
-            frame_interval = int(sampling_fps // 10)
-        else:
-            frame_interval = max(1, int(round(sampling_fps / 10)))
+        frame_interval = max(1, int(round(sampling_fps / 10)))
 
         accident_frame = results["accident_frame"]
         start_index = results["start_index"]
 
         clip_inds = np.concatenate(np.arange(self.num_clips)[:, None] + np.arange(self.clip_len)[None, :])
-        if self.test_mode:
+        if is_submission_test:
             clip_inds *= frame_interval
         else:
+            # Round each timestamp independently to approximate 10 Hz.
             clip_inds = np.rint(clip_inds * sampling_fps / 10).astype(np.int32)
         clip_inds_max = clip_inds[-1]
-        if self.test_mode:
-            three_second_span = frame_interval * 30
-        else:
-            three_second_span = int(round(fps * 3))
+        three_second_span = int(round(sampling_fps * 3))
 
         if self.test_mode:
             if is_submission_test:
