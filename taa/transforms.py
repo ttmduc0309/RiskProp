@@ -42,27 +42,42 @@ class SampleFramesBeforeAccident(BaseTransform):
         """
         total_frames = results["total_frames"]
         fps = float(results["fps"])
-        if fps < 10:
+        is_submission_test = self.test_mode and results.get("is_test", False)
+        if self.test_mode and not is_submission_test:
+            assert fps in [30, 20, 10]
+        elif fps < 10:
             raise ValueError("Sampling at 10 fps requires source video fps >= 10, got {}".format(fps))
-        frame_interval = max(1, int(round(fps / 10)))
+        # TOP treats Nexar videos as 30 FPS when constructing its submission
+        # windows, even when annotation metadata has a slightly different FPS.
+        sampling_fps = 30.0 if is_submission_test else fps
+        if self.test_mode:
+            frame_interval = int(sampling_fps // 10)
+        else:
+            frame_interval = max(1, int(round(sampling_fps / 10)))
 
         accident_frame = results["accident_frame"]
         start_index = results["start_index"]
 
         clip_inds = np.concatenate(np.arange(self.num_clips)[:, None] + np.arange(self.clip_len)[None, :])
-        clip_inds = np.rint(clip_inds * fps / 10).astype(np.int32)
+        if self.test_mode:
+            clip_inds *= frame_interval
+        else:
+            clip_inds = np.rint(clip_inds * sampling_fps / 10).astype(np.int32)
         clip_inds_max = clip_inds[-1]
-        three_second_span = int(round(fps * 3))
+        if self.test_mode:
+            three_second_span = frame_interval * 30
+        else:
+            three_second_span = int(round(fps * 3))
 
         if self.test_mode:
-            if results["target"] is True:
-                if accident_frame is None:
-                    # Test labels do not expose an accident frame. Use the
-                    # observed clip tail without consulting event-time labels.
-                    clip_inds += total_frames - 1 - clip_inds_max
-                else:
-                    # The last frame of the clip is the accident frame
-                    clip_inds += accident_frame - start_index - clip_inds_max
+            if is_submission_test:
+                # Match TOP's hidden-test submission path: labels are unknown,
+                # so sample the observed tail identically for every video.
+                clip_inds += total_frames - 1 - clip_inds_max
+            elif results["target"] is True:
+                # Match the public TOP/RiskProp validation sampler: the last
+                # frame of each clip is aligned with the accident frame.
+                clip_inds += accident_frame - start_index - clip_inds_max
             elif results["target"] is False:
                 if accident_frame is None:
                     if total_frames > clip_inds_max:

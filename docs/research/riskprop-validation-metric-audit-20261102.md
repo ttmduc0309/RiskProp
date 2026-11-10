@@ -61,3 +61,10 @@ The best-supported answer is: the paper reports the benchmark metrics, but does 
 1. Compare local positive/negative clip sampling (including equal negative sampling) and temporal-window construction against the paper and Nexar protocol.
 2. Define constrained AP precisely from the cited protocol and add a separate metric key instead of silently changing reported `mAP`.
 3. Evaluate each validation checkpoint with both existing and paper-matched metrics on the same fixed split, then compare checkpoint ranking. Keep the official held-out test data out of this selection process.
+# Metric naming update (2026-11-10)
+
+This is a historical audit of the earlier implementation, which emitted both
+standardized and normalized partial AUC. Current RiskProp code emits only the
+normalized metric as `mAUC_fpr_0.1@` during validation and `mAUC_fpr_0.1` in the
+Nexar test evaluator. References below to old metric names describe that
+earlier code and its results, not current output.

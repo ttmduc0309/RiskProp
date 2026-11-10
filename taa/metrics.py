@@ -20,7 +20,7 @@ from .utils import (
     plot_tta_curves_from_csvs,
     plot_mean_accident_aligned_curve_from_results,
 )
-from .mtta import calculate_mtta
+from .mtta import calculate_mtta, calculate_test_mtta
 
 
 @METRICS.register_module()
@@ -149,10 +149,7 @@ class AnticipationMetric(BaseMetric):
                 )
             if any(
                 result["target"]
-                and (
-                    result.get("onset_time_sec") is None
-                    or result.get("event_time_sec") is None
-                )
+                and (result.get("onset_time_sec") is None or result.get("event_time_sec") is None)
                 for result in test_results
             ):
                 raise ValueError(
@@ -164,24 +161,28 @@ class AnticipationMetric(BaseMetric):
                 if score.ndim > 1:
                     score = np.max(score, axis=-1)
                 test_scores.append(score.reshape(-1))
-            mtta_result = calculate_mtta(
+            mtta_result = calculate_test_mtta(
                 predictions=test_scores,
                 timestamps_sec=[np.asarray(x["frame_timestamps_sec"]).reshape(-1) for x in test_results],
                 targets=[bool(x["target"]) for x in test_results],
                 # Nexar negatives intentionally have no onset/event labels.
                 # The metric only reads these values for positive videos.
                 onset_times_sec=[
-                    float(x["onset_time_sec"]) if x["target"] else 0.0
+                    float(x["onset_time_sec"]) if x["target"] else None
                     for x in test_results
                 ],
                 event_times_sec=[
-                    float(x["event_time_sec"]) if x["target"] else 0.0
+                    float(x["event_time_sec"]) if x["target"] else None
                     for x in test_results
                 ],
                 far_max=self.fpr_max,
             )
             eval_results[f"mtta_test@{self.fpr_max:g}"] = mtta_result["mtta"]
+            if mtta_result["mtta_onset_observable"] is not None:
+                eval_results[f"mtta_test_onset_observable@{self.fpr_max:g}"] = mtta_result["mtta_onset_observable"]
             eval_results["mtta_test_num_positive"] = mtta_result["num_positive_videos"]
+            eval_results["mtta_test_num_onset_observable"] = mtta_result["num_positive_onset_observable"]
+            eval_results["mtta_test_num_onset_after_clip"] = mtta_result["num_positive_onset_after_clip"]
             eval_results["mtta_test_num_negative"] = mtta_result["num_negative_videos"]
             eval_results["mtta_test_max_empirical_far"] = max(mtta_result["empirical_far"])
 
@@ -235,8 +236,8 @@ class AnticipationMetric(BaseMetric):
             predictions=preds,
             timestamps_sec=[np.arange(len(pred), dtype=np.float64) / 10.0 for pred in preds],
             targets=[bool(label) for label in labels],
-            onset_times_sec=[float(index) / 10.0 for index in abnormal_start_inds],
             event_times_sec=[float(index) / 10.0 for index in accident_inds],
+            start_indices=abnormal_start_inds,
             far_max=self.fpr_max,
         )
         threshold_scores = np.sort(
@@ -259,33 +260,26 @@ class AnticipationMetric(BaseMetric):
         preds_n = [np.max(pred[-5:]) for pred, label in zip(preds, labels) if not label]
         y = [1] * len(preds_0) + [0] * len(preds_n)
         fpr_name = "{:g}".format(self.fpr_max)
-        eval_results[f"AUC_fpr_{fpr_name}_std{sep}0.0s"], fpr_0, tpr_0 = auc(np.array(y), np.array(preds_0 + preds_n), self.fpr_max)
-        eval_results[f"AUC_fpr_{fpr_name}_std{sep}0.5s"], fpr_5, tpr_5 = auc(np.array(y), np.array(preds_5 + preds_n), self.fpr_max)
-        eval_results[f"AUC_fpr_{fpr_name}_std{sep}1.0s"], fpr_10, tpr_10 = auc(np.array(y), np.array(preds_10 + preds_n), self.fpr_max)
-        eval_results[f"AUC_fpr_{fpr_name}_std{sep}1.5s"], fpr_15, tpr_15 = auc(np.array(y), np.array(preds_15 + preds_n), self.fpr_max)
-        eval_results[f"mAUC_fpr_{fpr_name}_std{sep}"] = (
-            eval_results[f"AUC_fpr_{fpr_name}_std{sep}0.5s"] + eval_results[f"AUC_fpr_{fpr_name}_std{sep}1.0s"] + eval_results[f"AUC_fpr_{fpr_name}_std{sep}1.5s"]
-        ) / 3
-        eval_results[f"AUC_fpr_{fpr_name}_norm{sep}0.0s"] = normalized_partial_auc(
+        eval_results[f"AUC_fpr_{fpr_name}{sep}0.0s"] = normalized_partial_auc(
             np.array(y), np.array(preds_0 + preds_n), self.fpr_max
         )
-        eval_results[f"AUC_fpr_{fpr_name}_norm{sep}0.5s"] = normalized_partial_auc(
+        eval_results[f"AUC_fpr_{fpr_name}{sep}0.5s"] = normalized_partial_auc(
             np.array(y), np.array(preds_5 + preds_n), self.fpr_max
         )
-        eval_results[f"AUC_fpr_{fpr_name}_norm{sep}1.0s"] = normalized_partial_auc(
+        eval_results[f"AUC_fpr_{fpr_name}{sep}1.0s"] = normalized_partial_auc(
             np.array(y), np.array(preds_10 + preds_n), self.fpr_max
         )
-        eval_results[f"AUC_fpr_{fpr_name}_norm{sep}1.5s"] = normalized_partial_auc(
+        eval_results[f"AUC_fpr_{fpr_name}{sep}1.5s"] = normalized_partial_auc(
             np.array(y), np.array(preds_15 + preds_n), self.fpr_max
         )
-        eval_results[f"mAUC_fpr_{fpr_name}_norm{sep}"] = (
-            eval_results[f"AUC_fpr_{fpr_name}_norm{sep}0.5s"] + eval_results[f"AUC_fpr_{fpr_name}_norm{sep}1.0s"] + eval_results[f"AUC_fpr_{fpr_name}_norm{sep}1.5s"]
+        eval_results[f"mAUC_fpr_{fpr_name}{sep}"] = (
+            eval_results[f"AUC_fpr_{fpr_name}{sep}0.5s"] + eval_results[f"AUC_fpr_{fpr_name}{sep}1.0s"] + eval_results[f"AUC_fpr_{fpr_name}{sep}1.5s"]
         ) / 3
 
-        eval_results[f"AUC_full{sep}0.0s"], fpr_0, tpr_0 = auc(np.array(y), np.array(preds_0 + preds_n), 1)
-        eval_results[f"AUC_full{sep}0.5s"], fpr_5, tpr_5 = auc(np.array(y), np.array(preds_5 + preds_n), 1)
-        eval_results[f"AUC_full{sep}1.0s"], fpr_10, tpr_10 = auc(np.array(y), np.array(preds_10 + preds_n), 1)
-        eval_results[f"AUC_full{sep}1.5s"], fpr_15, tpr_15 = auc(np.array(y), np.array(preds_15 + preds_n), 1)
+        eval_results[f"AUC_full{sep}0.0s"], fpr_0, tpr_0 = auc(np.array(y), np.array(preds_0 + preds_n))
+        eval_results[f"AUC_full{sep}0.5s"], fpr_5, tpr_5 = auc(np.array(y), np.array(preds_5 + preds_n))
+        eval_results[f"AUC_full{sep}1.0s"], fpr_10, tpr_10 = auc(np.array(y), np.array(preds_10 + preds_n))
+        eval_results[f"AUC_full{sep}1.5s"], fpr_15, tpr_15 = auc(np.array(y), np.array(preds_15 + preds_n))
         eval_results[f"mAUC_full{sep}"] = (
             eval_results[f"AUC_full{sep}0.5s"] + eval_results[f"AUC_full{sep}1.0s"] + eval_results[f"AUC_full{sep}1.5s"]
         ) / 3
@@ -302,14 +296,16 @@ class AnticipationMetric(BaseMetric):
         return eval_results
 
 
-def auc(y_true, y_scores, fpr_max=0.1):
-    score = roc_auc_score(y_true, y_scores, max_fpr=fpr_max)
+def auc(y_true, y_scores):
+    score = roc_auc_score(y_true, y_scores)
     fpr, tpr, _ = roc_curve(y_true, y_scores)
     return score, fpr, tpr
 
 
 def normalized_partial_auc(y_true, y_scores, fpr_max=0.1):
     """Return raw ROC area up to ``fpr_max``, divided by ``fpr_max``."""
+    if not 0 < fpr_max <= 1:
+        raise ValueError("fpr_max must be in (0, 1]")
     fpr, tpr, _ = roc_curve(y_true, y_scores)
     stop = np.searchsorted(fpr, fpr_max, side="right")
     partial_fpr = fpr[:stop]

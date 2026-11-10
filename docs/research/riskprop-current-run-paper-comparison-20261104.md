@@ -61,3 +61,9 @@ theo `mAUC_full@`; paper không nói tiêu chí validation/checkpoint selection.
 [paper]: https://openaccess.thecvf.com/content/CVPR2026/papers/Zou_RiskProp_Collision-Anchored_Self-Supervised_Risk_Propagation_For_Early_Accident_Anticipation_CVPR_2026_paper.pdf
 [repo]: https://github.com/xingyueye5/RiskProp
 [nexar]: https://huggingface.co/datasets/nexar-ai/nexar_collision_prediction
+# Metric naming update (2026-11-10)
+
+This report preserves results from the earlier two-variant implementation.
+Current RiskProp validation and test evaluation emit only normalized partial
+AUC, named `mAUC_fpr_0.1@` and `mAUC_fpr_0.1`, respectively. The standardized
+score below is historical and is not produced by current code.

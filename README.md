@@ -107,8 +107,7 @@ Checkpoints and logs are saved to `work_dirs/<config_name>/`. The default best-c
 
 | Metric | Description |
 | --- | --- |
-| `mAUC_fpr_0.1_std@` | Mean standardized partial AUC from scikit-learn at `FPR <= 0.1` across `0.5s`, `1.0s`, and `1.5s` |
-| `mAUC_fpr_0.1_norm@` | Mean raw ROC area up to `FPR = 0.1`, divided by `0.1`, across `0.5s`, `1.0s`, and `1.5s` |
+| `mAUC_fpr_0.1@` | Mean ROC area up to `FPR = 0.1`, divided by `0.1`, across `0.5s`, `1.0s`, and `1.5s` |
 | `mAUC_full@` | Mean full-curve AUC on validation at `0.5s`, `1.0s`, and `1.5s` |
 | `mAP` | Mean Average Precision at `0.5s`, `1.0s`, and `1.5s` |
 | `mTTA@0.1` | Mean Time-To-Accident at `FPR <= 0.1` |

@@ -70,13 +70,23 @@ CUDA_VISIBLE_DEVICES=0,1 PORT=29517 conda run -n riskprop \
   --work-dir work_dirs/riskprop_nexar_test_full
 ```
 
-The full-timeline pass uses causal 5-frame windows ending every 0.1 seconds.
-At FAR 0.1 the report emits one `mtta` value, averaging over all positive
-videos. A positive video with no observable post-onset alarm—including a clip
-whose onset is beyond its last frame—contributes zero, matching TOP's
-zero-for-miss convention. The local Nexar metadata supplies labels and
-clip-relative onset/event times; an evaluation server that withholds these
-labels cannot provide test mTTA.
+The full-timeline pass uses causal 5-frame windows at approximately 10 Hz.
+For test mTTA it treats clip-relative `time_of_alert` as the onset proxy, then
+searches observed scores from onset through the event. TTA is the reconstructed
+event timestamp minus the first observed alarm timestamp, even when the event
+occurs after the final frame. The main `mtta` averages over all positive clips,
+using zero when no post-onset alarm is observed. The report also includes
+`mtta_onset_observable`, averaged only over positives with at least one scored
+timestamp between onset and event, plus the number whose onset is after the
+last scored timestamp. A null secondary metric means no positive has an
+observable window. No scores are invented after the clip ends.
+
+Thresholds use the negative-frame rank grid with empirical FAR at most 0.1;
+ties that exceed the limit are excluded. If no ranked threshold meets the
+limit, the evaluator uses a threshold above the maximum negative score. The
+report gives the realized maximum FAR. This is a documented test protocol,
+not an official Nexar mTTA or a verified reproduction of the paper. Local
+metadata must provide the labels and clip-relative onset and event times.
 
 Check that the selected GPU is available before running. The full-data config points at this prepared dataset and uses the repository's `nexar_val` split.
 
@@ -99,4 +109,4 @@ conda run -n riskprop python tools/analysis_tools/evaluate_nexar_submission.py \
 
 ## Scope and reproduction limitations
 
-This setup establishes a working Nexar training/evaluation path. It does not claim reproduction of the paper. The public loss still differs from the paper's positive-only FFR/confidence handling, the collision BCE weight is unspecified in the paper, and the published Nexar partial-AUC value is below the lower bound of the current scikit-learn standardized partial AUC implementation. Confirm the authors' evaluator/protocol and settle these loss details before using a full run as a paper reproduction. See [`../docs/research/riskprop-reproducibility-audit.md`](../../docs/research/riskprop-reproducibility-audit.md).
+This setup establishes a working Nexar training/evaluation path. It does not claim reproduction of the paper. The public loss still differs from the paper's positive-only FFR/confidence handling, the collision BCE weight is unspecified in the paper, and the exact partial-AUC protocol needs confirmation. The FPR-limited mAUC uses interpolated ROC area divided by the FPR limit. See [`../docs/research/riskprop-reproducibility-audit.md`](../../docs/research/riskprop-reproducibility-audit.md).

@@ -21,7 +21,7 @@ from sklearn.metrics import (
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from taa.mtta import calculate_mtta  # noqa: E402
+from taa.mtta import calculate_test_mtta  # noqa: E402
 
 
 def grouped_map(solution, submission):
@@ -81,6 +81,7 @@ def grouped_mauc(solution_with_scores, fpr_max=0.1):
     if not 0 < fpr_max <= 1:
         raise ValueError("fpr_max must be in (0, 1]")
     group_metrics = {}
+    partial_key = "AUC_fpr_{:g}".format(fpr_max)
     for group, rows in solution_with_scores.groupby("group", sort=True):
         targets = rows["target"].astype(int).to_numpy()
         scores = rows["score"].astype(float).to_numpy()
@@ -93,16 +94,15 @@ def grouped_mauc(solution_with_scores, fpr_max=0.1):
             )
         group_metrics[str(group)] = {
             "full": float(roc_auc_score(targets, scores)),
-            "partial_standardized": float(
-                roc_auc_score(targets, scores, max_fpr=fpr_max)
-            ),
-            "partial_normalized": partial_auc_normalized(targets, scores, fpr_max),
+            partial_key: partial_auc_normalized(targets, scores, fpr_max),
         }
     if not group_metrics:
         raise ValueError("Cannot compute mAUC for an empty test subset")
     means = {
-        metric: float(np.mean([values[metric] for values in group_metrics.values()]))
-        for metric in ("full", "partial_standardized", "partial_normalized")
+        "full": float(np.mean([values["full"] for values in group_metrics.values()])),
+        "mAUC_fpr_{:g}".format(fpr_max): float(
+            np.mean([values[partial_key] for values in group_metrics.values()])
+        ),
     }
     return {"mean": means, "by_group": group_metrics}
 
@@ -123,17 +123,41 @@ def evaluate_temporal_predictions(path, expected_ids, expected_targets, far_max)
     if temporal_targets != expected_targets:
         raise ValueError("Temporal prediction labels do not match the Nexar solution")
 
-    result = calculate_mtta(
-        predictions=[record["scores"] for record in records],
-        timestamps_sec=[record["timestamps_sec"] for record in records],
+    predictions = []
+    timestamps = []
+    skipped_unscored = 0
+    for record in records:
+        # Predictive models such as BADAS intentionally have no scores for
+        # their warm-up frames. JSON null represents those missing values.
+        raw_scores = np.asarray(
+            [np.nan if score is None else score for score in record["scores"]],
+            dtype=np.float64,
+        ).reshape(-1)
+        raw_timestamps = np.asarray(record["timestamps_sec"], dtype=np.float64).reshape(-1)
+        if raw_scores.size != raw_timestamps.size:
+            raise ValueError("Temporal scores and timestamps must have equal lengths")
+        if not np.all(np.isfinite(raw_timestamps)):
+            raise ValueError("Temporal timestamps must all be finite")
+        if np.any(np.isinf(raw_scores)):
+            raise ValueError("Temporal scores may be finite or null, not infinite")
+        valid = np.isfinite(raw_scores)
+        if not np.any(valid):
+            raise ValueError("Each temporal prediction needs at least one finite score")
+        skipped_unscored += int((~valid).sum())
+        predictions.append(raw_scores[valid].tolist())
+        timestamps.append(raw_timestamps[valid].tolist())
+
+    result = calculate_test_mtta(
+        predictions=predictions,
+        timestamps_sec=timestamps,
         targets=[bool(record["target"]) for record in records],
         # Nexar negatives intentionally have no onset/event labels.
         onset_times_sec=[
-            float(record["onset_time_sec"]) if record["target"] else 0.0
+            record.get("onset_time_sec") if record["target"] else None
             for record in records
         ],
         event_times_sec=[
-            float(record["event_time_sec"]) if record["target"] else 0.0
+            record.get("event_time_sec") if record["target"] else None
             for record in records
         ],
         far_max=far_max,
@@ -142,12 +166,26 @@ def evaluate_temporal_predictions(path, expected_ids, expected_targets, far_max)
         key: result[key]
         for key in (
             "mtta",
+            "mtta_onset_observable",
             "num_positive_videos",
+            "num_positive_onset_observable",
+            "num_positive_onset_after_clip",
             "num_negative_videos",
             "num_negative_scores",
         )
     }
     summary["max_empirical_far"] = max(result["empirical_far"])
+    summary["num_thresholds"] = len(result["thresholds"])
+    summary["num_unscored_frames"] = skipped_unscored
+    summary["inference_precision"] = sorted(
+        {str(record.get("inference_precision", "unspecified")) for record in records}
+    )
+    summary["window_batch_sizes"] = sorted(
+        {int(record.get("window_batch_size", 1)) for record in records}
+    )
+    summary["decode_workers"] = sorted(
+        {int(record.get("decode_workers", 1)) for record in records}
+    )
     return summary
 
 
@@ -204,16 +242,16 @@ def write_combined_report(output_dir, prediction_path, temporal_path, merged, fa
                 float(values["2"]), map_results[subset]
             )
         )
+    partial_key = "mAUC_fpr_{:g}".format(far_max)
     auc_rows = [
-        "| Test subset | Full mAUC | Standardized partial mAUC | Normalized partial mAUC |",
-        "|---|---:|---:|---:|",
+        "| Test subset | Full mAUC | {} |".format(partial_key),
+        "|---|---:|---:|",
     ]
     for subset in ("Public", "Private", "All"):
         values = mauc_results[subset]["mean"]
         auc_rows.append(
-            "| {} | {:.6f} | {:.6f} | {:.6f} |".format(
-                subset, values["full"], values["partial_standardized"],
-                values["partial_normalized"]
+            "| {} | {:.6f} | {:.6f} |".format(
+                subset, values["full"], values[partial_key]
             )
         )
     report = """# RiskProp Nexar test evaluation
@@ -228,20 +266,28 @@ The official Nexar score averages AP over its three groups.
 
 ## Test mAUC
 
-Each mAUC is the unweighted mean of ROC AUC over the three Nexar groups. The standardized partial value uses sklearn's standardized `max_fpr` definition; the normalized partial value is raw ROC area over FPR `[0, {far:.2f}]` divided by `{far:.2f}`. They are reported separately because the paper's exact partial-AUC normalization needs to be matched before claiming paper-equivalent results.
+Each mAUC is the unweighted mean of ROC AUC over the three Nexar groups. The FPR-limited value is the ROC area over `[0, {far:.2f}]`, interpolated at the boundary and divided by `{far:.2f}`.
 
 {auc_table}
 
 ## Full-timeline test mTTA
 
-Scores are evaluated at 10 Hz. The threshold grid is formed from negative-frame scores at FAR <= {far:.2f}.
+Scores are searched only at observed timestamps from the mapped alert time (onset proxy) through the event time. TTA is the reconstructed event timestamp minus the first observed alarm timestamp; a missed or unobservable alarm contributes zero to the all-positive mean. The event can occur after the final video frame. The secondary mean includes positives with at least one scored timestamp from onset through event. The negative-frame threshold grid is filtered to empirical FAR <= {far:.2f}, including tied scores; if no grid threshold is valid, a threshold above the maximum negative score is used. This is a documented test protocol, not an official Nexar mTTA.
 
 | Metric | Result |
 |---|---:|
-| mTTA (all positive videos; no valid post-onset alarm contributes 0) | {mtta:.4f} s |
+| mTTA, all positive videos | {mtta:.4f} s |
+| mTTA with observable onset | {mtta_observable} |
 | Positive videos | {n_pos} |
+| Positive videos with observable onset-to-event scores | {n_observable} |
+| Positive videos with onset after last scored timestamp | {n_onset_after} |
 | Negative videos | {n_neg} |
 | Negative frame scores | {n_neg_scores} |
+| Selected thresholds | {n_thresholds} |
+| Warm-up frames without scores (excluded) | {n_unscored} |
+| Inference precision | {precision} |
+| Window batch size | {batch_size} |
+| CPU decode workers | {decode_workers} |
 | Maximum empirical FAR among selected thresholds | {max_far:.6f} |
 
 ## Artifacts
@@ -253,9 +299,18 @@ Scores are evaluated at 10 Hz. The threshold grid is formed from negative-frame 
         n=len(merged), ap_table="\n".join(ap_rows),
         auc_table="\n".join(auc_rows), far=far_max,
         mtta=mtta["mtta"],
+        mtta_observable=("{:.4f} s".format(mtta["mtta_onset_observable"])
+                         if mtta["mtta_onset_observable"] is not None else "N/A"),
         n_pos=mtta["num_positive_videos"],
+        n_observable=mtta["num_positive_onset_observable"],
+        n_onset_after=mtta["num_positive_onset_after_clip"],
         n_neg=mtta["num_negative_videos"],
         n_neg_scores=mtta["num_negative_scores"],
+        n_thresholds=mtta["num_thresholds"],
+        n_unscored=mtta["num_unscored_frames"],
+        precision=", ".join(mtta["inference_precision"]),
+        batch_size=", ".join(str(value) for value in mtta["window_batch_sizes"]),
+        decode_workers=", ".join(str(value) for value in mtta["decode_workers"]),
         max_far=mtta["max_empirical_far"],
         prediction_csv=Path(prediction_path).resolve(),
         temporal_path=Path(temporal_path).resolve(),
@@ -314,14 +369,10 @@ def main():
     for subset in ("Public", "Private", "All"):
         subset_rows = merged if subset == "All" else merged.loc[merged["Usage"] == subset]
         auc_values = grouped_mauc(subset_rows, args.far_max)["mean"]
-        print(
-            "mAUC ({}) full: {:.6f}; partial standardized @ FPR {:.2f}: {:.6f}; "
-            "partial normalized @ FPR {:.2f}: {:.6f}".format(
-                subset, auc_values["full"], args.far_max,
-                auc_values["partial_standardized"], args.far_max,
-                auc_values["partial_normalized"]
-            )
-        )
+        partial_key = "mAUC_fpr_{:g}".format(args.far_max)
+        print("mAUC ({}) full: {:.6f}; {}: {:.6f}".format(
+            subset, auc_values["full"], partial_key, auc_values[partial_key]
+        ))
     if args.temporal_predictions:
         output_dir = args.output_dir or str(Path(args.submission).resolve().parent)
         map_results, mauc_results, mtta, results_path, report_path = write_combined_report(
