@@ -169,5 +169,10 @@ outputs
 # Local Nexar dataset links/annotations and generated training artifacts
 /data/nexar-collision-prediction/
 /work_dirs/
+/docs/research/
 *.pth
 *.log
+
+# Track the Nexar processing package and all of its contents.
+!/nexar_processing_package/
+!/nexar_processing_package/**

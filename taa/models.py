@@ -299,7 +299,7 @@ class AnticipationHead(BaseHead):
             loss_ffr_weight= 1.5
             loss_mono_weight= 1.1
             return dict(
-                loss_cls=loss_cls * loss_cls_weight
+                loss_cls=loss_cls * loss_cls_weight,
                 loss_ffr=loss_ffr * loss_ffr_weight,
                 loss_mono=loss_adaptive * loss_mono_weight
             )
