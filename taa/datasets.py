@@ -29,6 +29,8 @@ class MultiDataset(BaseDataset):
         train_with_val=False,
         val_train=False,
         indices=None,
+        include_test=True,
+        test_only=False,
     ) -> None:
         self.cap = cap
         self.dada = dada
@@ -45,6 +47,8 @@ class MultiDataset(BaseDataset):
         self.train_with_val = train_with_val
         self.val_train = val_train
         self._indices = indices
+        self.include_test = include_test
+        self.test_only = test_only
         self._metainfo = self._load_metainfo(None)
         self.serialize_data = True
         self.max_refetch = 1000
@@ -306,6 +310,8 @@ class MultiDataset(BaseDataset):
                 # keep the train videos
                 if not self.test_mode and is_test:
                     continue
+                if self.test_mode and is_test and not self.include_test:
+                    continue
 
                 if not self.test_mode and not self.train_with_val and video_id in nexar_val:
                     continue
@@ -332,6 +338,8 @@ class MultiDataset(BaseDataset):
                         is_test=is_test,
                     )
                 )
+        if self.test_only:
+            data_list = [item for item in data_list if item.get("is_test", False)]
         return data_list
 
     def prepare_data(self, idx):

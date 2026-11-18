@@ -187,10 +187,14 @@ val_dataloader = dict(
         modality=modality,
         test_mode=True,
         val_train=False,
+        include_test=False,
         # indices=list(range(20)),
     ),
 )
-test_dataloader = val_dataloader
+test_dataloader = {
+    **val_dataloader,
+    "dataset": {**val_dataloader["dataset"], "include_test": True, "test_only": True},
+}
 
 val_evaluator = dict(type="AnticipationMetric", fpr_max=0.1, vis_list=vis_list, output_dir="visualizations")
 test_evaluator = dict(**val_evaluator, submission_file="outputs/nexar_submission.csv",
