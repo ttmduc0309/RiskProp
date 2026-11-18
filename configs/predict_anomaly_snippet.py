@@ -159,7 +159,7 @@ train_dataloader = dict(
     sampler=dict(type="DefaultSampler", shuffle=True,round_up=True),
     dataset=dict(
         type="MultiDataset",
-        cap=cap,
+        # cap=cap,
         # dada=dada,
         # d2city=d2city,
         nexar=nexar,
@@ -178,7 +178,7 @@ val_dataloader = dict(
     sampler=dict(type="DefaultSampler", shuffle=False,round_up=False),
     dataset=dict(
         type="MultiDataset",
-        cap=cap,
+        # cap=cap,
         # dada=dada,
         # d2city=d2city,
         nexar=nexar,
