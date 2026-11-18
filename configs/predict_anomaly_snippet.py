@@ -6,7 +6,7 @@ custom_imports = dict(imports="taa")
 cap = dict(data_root="data/MM-AU/CAP-DATA", ann_file="cap_text_annotations.xls", filename_tmpl="{:06}.jpg", start_index=1)
 dada = dict(data_root="data/MM-AU/DADA-DATA", ann_file="dada_text_annotations.xlsx", filename_tmpl="{:04}.png", start_index=1)
 d2city = dict(data_root="data/D_square-City", ann_file="annotations.csv")
-nexar = dict(data_root="data/nexar-collision-prediction", ann_file="annotations.csv", filename_tmpl="{:06}.jpg", start_index=0)
+nexar = dict(data_root="data/nexar-collision-prediction", ann_file="annotations.csv", filename_tmpl=None, start_index=0)
 clip_len = 5
 num_clips = 30
 modality = "rgb"
@@ -162,7 +162,7 @@ train_dataloader = dict(
         cap=cap,
         # dada=dada,
         # d2city=d2city,
-        # nexar=nexar,
+        nexar=nexar,
         pipeline_video=train_pipeline_video,
         pipeline_frame=train_pipeline_frame,
         modality=modality,
@@ -181,7 +181,7 @@ val_dataloader = dict(
         cap=cap,
         # dada=dada,
         # d2city=d2city,
-        # nexar=nexar,
+        nexar=nexar,
         pipeline_video=val_pipeline_video,
         pipeline_frame=val_pipeline_frame,
         modality=modality,
@@ -193,7 +193,8 @@ val_dataloader = dict(
 test_dataloader = val_dataloader
 
 val_evaluator = dict(type="AnticipationMetric", fpr_max=0.1, vis_list=vis_list, output_dir="visualizations")
-test_evaluator = val_evaluator
+test_evaluator = dict(**val_evaluator, submission_file="outputs/nexar_submission.csv",
+                      submission_template="../datasets/Nexar/sample_submission.csv")
 
 train_cfg = dict(type="EpochBasedTrainLoop", max_epochs=50, val_begin=1, val_interval=1)
 

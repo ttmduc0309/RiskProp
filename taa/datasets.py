@@ -298,12 +298,9 @@ class MultiDataset(BaseDataset):
                 target = bool(line[6]) if not is_test else None
                 if not is_test:
                     filename = "train"
-                    frame_dir = "train_raw_frames"
                 else:
                     filename = "test"
-                    frame_dir = "test_raw_frames"
                 filename = osp.join(self.nexar["data_root"], filename, video_id + ".mp4")
-                frame_dir = osp.join(self.nexar["data_root"], frame_dir, video_id)
                 fps = 30
 
                 # keep the train videos
@@ -321,8 +318,8 @@ class MultiDataset(BaseDataset):
                     dict(
                         dataset="nexar",
                         filename=filename,
-                        frame_dir=frame_dir,
-                        filename_tmpl=self.nexar["filename_tmpl"],
+                        frame_dir=None,
+                        filename_tmpl=None,
                         start_index=self.nexar["start_index"],
                         video_id=video_id,
                         type=None,
@@ -339,7 +336,9 @@ class MultiDataset(BaseDataset):
 
     def prepare_data(self, idx):
         data_info = self.get_data_info(idx)
-        if data_info["dataset"] in ["d2city"]:
+        # These datasets provide video files and must be decoded from the
+        # `filename` field. The remaining datasets use extracted raw frames.
+        if data_info["dataset"] in ("d2city", "nexar"):
             pipeline = self.pipeline_video
         else:
             pipeline = self.pipeline_frame

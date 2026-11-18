@@ -169,6 +169,7 @@ outputs
 # Local Nexar dataset links/annotations and generated training artifacts
 /data/nexar-collision-prediction/
 /work_dirs/
+/reports/
 /docs/research/
 *.pth
 *.log

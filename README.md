@@ -92,6 +92,12 @@ tools/dist_test.sh configs/predict_anomaly_snippet.py <checkpoint>.pth 8 \
   --dump outputs/predictions.pkl
 ```
 
+When the test config includes Nexar, evaluation also writes
+`outputs/nexar_submission.csv` in the `id,score` format and ID order of
+`../datasets/Nexar/sample_submission.csv`. All template
+IDs must be present exactly once. Set `test_evaluator.submission_file` with
+`--cfg-options` to choose a different output path.
+
 Checkpoints and logs are saved to `work_dirs/<config_name>/`. The default best-checkpoint criterion is `mAUC@`.
 
 ## Config Overview

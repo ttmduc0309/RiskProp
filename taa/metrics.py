@@ -22,12 +22,15 @@ from .utils import (
 
 @METRICS.register_module()
 class AnticipationMetric(BaseMetric):
-    def __init__(self, fpr_max: float = 0.1, vis_list=[], output_dir=None) -> None:
+    def __init__(self, fpr_max: float = 0.1, vis_list=[], output_dir=None,
+                 submission_file=None, submission_template=None) -> None:
         super().__init__()
 
         self.fpr_max = fpr_max
         self.vis_list = vis_list
         self.output_dir = output_dir
+        self.submission_file = submission_file
+        self.submission_template = submission_template
         self.epoch = None
 
     def process(self, data_batch: Sequence[Tuple[Any, Dict]], data_samples: Sequence[Dict]) -> None:
@@ -91,10 +94,29 @@ class AnticipationMetric(BaseMetric):
         if len(preds) > 0:
             eval_results.update(self.calculate(preds, targets, abnormal_start_inds, accident_inds, "@"))
 
-        data = dict(
-            id=[x["video_id"] for x in results if x["is_test"]],
-            target=[f'{np.max(x["pred"][-1]):.4f}' for x in results if x["is_test"]],
-        )
+        test_results = [x for x in results if x["dataset"] == "nexar" and x["is_test"]]
+        if self.submission_file and test_results:
+            if not self.submission_template:
+                raise ValueError("submission_template is required when exporting Nexar predictions")
+            template = pd.read_csv(self.submission_template, dtype={"id": str})
+            if list(template.columns) != ["id", "score"] or template["id"].duplicated().any():
+                raise ValueError("Nexar submission template must have unique IDs and columns id,score")
+            scores = pd.DataFrame({
+                "id": [str(x["video_id"]).zfill(5) for x in test_results],
+                "score": [float(np.max(x["pred"][-1])) for x in test_results],
+            })
+            if scores["id"].duplicated().any():
+                raise ValueError("Duplicate Nexar test IDs in predictions")
+            if set(scores["id"]) != set(template["id"]):
+                missing = len(set(template["id"]) - set(scores["id"]))
+                extra = len(set(scores["id"]) - set(template["id"]))
+                raise ValueError(f"Nexar submission IDs do not match template: {missing} missing, {extra} extra")
+            submission = template[["id"]].merge(scores, on="id", validate="one_to_one", sort=False)
+            output_parent = os.path.dirname(self.submission_file)
+            if output_parent:
+                os.makedirs(output_parent, exist_ok=True)
+            submission.to_csv(self.submission_file, index=False)
+            print(f"Nexar submission saved to {self.submission_file} ({len(submission)} videos)")
 
         vis_results=[]
         for result in results:
