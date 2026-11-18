@@ -43,7 +43,7 @@ def balanced_subset(dataset, limit, validation=False):
         raise ValueError('Smoke needs at least one positive and one negative sample; '
                          f'found negative={len(groups[0])}, positive={len(groups[1])}.')
     indices = [i for pair in zip(groups[0][:count], groups[1][:count]) for i in pair]
-    return dataset.get_subset(indices), len(groups[0]) + len(groups[1])
+    return indices, len(groups[0]) + len(groups[1])
 
 
 class SmokeTiming(Hook):
@@ -111,11 +111,11 @@ def main():
     for key, limit, validation in (('train_dataloader', args.train_samples, False),
                                    ('val_dataloader', args.val_samples, True)):
         dataset = DATASETS.build(copy.deepcopy(cfg[key].dataset))
-        subset, full_size = balanced_subset(dataset, limit, validation)
-        cfg[key].dataset = subset
+        indices, full_size = balanced_subset(dataset, limit, validation)
+        cfg[key].dataset.indices = indices
         full_sizes.append(full_size)
         if int(os.environ.get('RANK', '0')) == 0:
-            print(f'{key}: smoke={len(subset)}, eligible full={full_size}', flush=True)
+            print(f'{key}: smoke={len(indices)}, eligible full={full_size}', flush=True)
     cfg.train_cfg.max_epochs = 1
     cfg.train_cfg.val_begin = 1
     cfg.train_cfg.val_interval = 1
