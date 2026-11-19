@@ -463,7 +463,8 @@ class RunDiagnosticsHook(Hook):
         self._append_jsonl(
             self.diagnostics_dir / "validation_metrics.jsonl",
             {
-                "epoch": runner.epoch + 1,
+                # The train loop increments runner.epoch before entering validation.
+                "epoch": runner.epoch,
                 "global_iteration": runner.iter,
                 "num_samples": len(runner.val_dataloader.dataset),
                 "duration_seconds": (
