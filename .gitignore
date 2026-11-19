@@ -170,6 +170,7 @@ outputs
 /data/nexar-collision-prediction/
 /work_dirs/
 /reports/
+/research_notes/
 /docs/research/
 *.pth
 *.log

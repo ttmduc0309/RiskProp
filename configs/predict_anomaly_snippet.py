@@ -204,7 +204,11 @@ train_cfg = dict(type="EpochBasedTrainLoop", max_epochs=50, val_begin=1, val_int
 
 # Save the weights after every epoch, and keep only the latest checkpoint.
 default_hooks = dict(checkpoint=dict(type="CheckpointHook", interval=1, max_keep_ckpts=50, save_best="mAUC@", rule="greater"))
-custom_hooks = [dict(type="EpochHook"), dict(type="AnticipationMetricHook")]
+custom_hooks = [
+    dict(type="EpochHook"),
+    dict(type="AnticipationMetricHook"),
+    dict(type="RunDiagnosticsHook"),
+]
 
 model = dict(
     type="Recognizer3DTwoStream" if modality in ["both", "two_stream"] else "Recognizer3D",
