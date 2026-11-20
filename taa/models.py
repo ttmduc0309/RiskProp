@@ -227,6 +227,28 @@ class AnticipationHead(BaseHead):
 
         return loss_total
 
+    @staticmethod
+    def _future_frame_regularization_loss(cls_scores, data_samples):
+        """Apply FFR only to accident (positive) sequences.
+
+        The next-frame prediction is a stop-gradient target for the
+        preceding frame. Accident-free sequences have no collision anchor,
+        so the RiskProp objective disables FFR for them.
+        """
+        positive_indices = [
+            index for index, data_sample in enumerate(data_samples)
+            if bool(data_sample.target)
+        ]
+        if not positive_indices or cls_scores.shape[1] < 2:
+            # Keep a differentiable zero so batches without positives can
+            # still use the same loss/backward path safely.
+            return cls_scores.sum() * 0.0
+
+        positive_scores = cls_scores[positive_indices]
+        return (
+            positive_scores[:, 1:].detach() - positive_scores[:, :-1]
+        ).square().mean()
+
 
     def loss_by_feat(self, cls_scores: torch.Tensor, data_samples: SampleList) -> Dict:
         if self.two_stream:
@@ -247,7 +269,8 @@ class AnticipationHead(BaseHead):
             preds, labels = torch.concatenate(preds), torch.concatenate(labels)
 
             loss_cls = self.loss_cls(preds, labels, pos_weight=self.pos_weight)
-            loss_ffr = ((cls_scores[:, 1:].detach() - cls_scores[:, :-1]) ** 2).mean()
+            loss_ffr = self._future_frame_regularization_loss(
+                cls_scores, data_samples)
             #loss_mono = self.monotony_loss(cls_scores, data_samples)
             loss_adaptive = self.adaptive_mono_loss(cls_scores, data_samples)
 
@@ -291,7 +314,8 @@ class AnticipationHead(BaseHead):
             loss_cls = self.loss_cls(cls_scores, labels, pos_weight=self.pos_weight)
             #return dict(loss_cls=loss_cls)
             cls_scores = cls_scores.reshape(len(data_samples), -1)
-            loss_ffr = ((cls_scores[:, 1:].detach()- cls_scores[:, :-1]) ** 2).mean()
+            loss_ffr = self._future_frame_regularization_loss(
+                cls_scores, data_samples)
             loss_adaptive = self.adaptive_mono_loss(cls_scores, data_samples)
 
             # loss weight config
