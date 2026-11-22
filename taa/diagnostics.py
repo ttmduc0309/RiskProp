@@ -227,7 +227,7 @@ def _annotation_metadata(config, project_root):
 
 @HOOKS.register_module()
 class RunDiagnosticsHook(Hook):
-    """Write run metadata and structured per-epoch training/validation metrics."""
+    """Write run metadata and structured training/validation metrics."""
 
     priority = "VERY_LOW"
 
@@ -422,6 +422,100 @@ class RunDiagnosticsHook(Hook):
         self._train_history_lengths = {
             key: len(history.data[0]) for key, history in runner.message_hub.log_scalars.items()
         }
+
+    @staticmethod
+    def _batch_data_samples(data_batch):
+        """Find packed data samples in the batch passed to ``train_step``."""
+        if isinstance(data_batch, dict):
+            if "data_samples" in data_batch:
+                value = data_batch["data_samples"]
+                return list(value) if isinstance(value, (list, tuple)) else [value]
+            samples = []
+            for value in data_batch.values():
+                samples.extend(RunDiagnosticsHook._batch_data_samples(value))
+            return samples
+        elif isinstance(data_batch, (list, tuple)):
+            samples = []
+            for value in data_batch:
+                samples.extend(RunDiagnosticsHook._batch_data_samples(value))
+            return samples
+        elif data_batch is not None and not torch.is_tensor(data_batch):
+            if hasattr(data_batch, "target"):
+                return [data_batch]
+        return []
+
+    @staticmethod
+    def _sample_target(data_sample):
+        if isinstance(data_sample, dict):
+            return data_sample.get("target")
+        target = getattr(data_sample, "target", None)
+        if target is None and hasattr(data_sample, "get"):
+            try:
+                target = data_sample.get("target")
+            except (KeyError, TypeError, AttributeError):
+                pass
+        return target
+
+    @staticmethod
+    def _scalar(value):
+        if torch.is_tensor(value):
+            return float(value.detach().cpu().item()) if value.numel() == 1 else None
+        if isinstance(value, np.ndarray):
+            return float(value.item()) if value.size == 1 else None
+        if isinstance(value, np.generic):
+            return float(value.item())
+        if isinstance(value, (int, float)):
+            return float(value)
+        return None
+
+    def after_train_iter(self, runner, batch_idx, data_batch=None, outputs=None):
+        """Record local loss components and clipping telemetry for each batch."""
+        if self.diagnostics_dir is None:
+            return
+
+        samples = self._batch_data_samples(data_batch)
+        targets = [self._sample_target(sample) for sample in samples]
+        positive_count = sum(target is not None and bool(target) for target in targets)
+        negative_count = sum(target is not None and not bool(target) for target in targets)
+        unknown_count = len(targets) - positive_count - negative_count
+
+        metrics = {}
+        if isinstance(outputs, dict):
+            for key, value in outputs.items():
+                if key == "loss" or key.startswith("loss_"):
+                    scalar = self._scalar(value)
+                    if scalar is not None:
+                        metrics[key] = scalar
+
+        grad_norm = None
+        history = runner.message_hub.log_scalars.get("train/grad_norm")
+        if history is not None and history.data[0]:
+            grad_norm = self._scalar(history.current())
+        clip_grad_kwargs = getattr(runner.optim_wrapper, "clip_grad_kwargs", None) or {}
+        clip_threshold = self._scalar(clip_grad_kwargs.get("max_norm"))
+        clipped = (
+            grad_norm is not None
+            and clip_threshold is not None
+            and grad_norm > clip_threshold
+        )
+
+        self._append_jsonl(
+            self.diagnostics_dir / f"training_batch_metrics_rank_{get_rank()}.jsonl",
+            {
+                "epoch": runner.epoch + 1,
+                "batch_index": batch_idx + 1,
+                "global_iteration": runner.iter,
+                "rank": get_rank(),
+                "local_batch_size": len(samples),
+                "positive_samples": positive_count,
+                "negative_samples": negative_count,
+                "unknown_label_samples": unknown_count,
+                "losses": metrics,
+                "grad_norm_pre_clip": grad_norm,
+                "grad_clip_threshold": clip_threshold,
+                "grad_was_clipped": clipped if clip_threshold is not None else None,
+            },
+        )
 
     def after_train_epoch(self, runner):
         if not is_main_process():
