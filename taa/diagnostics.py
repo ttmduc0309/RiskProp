@@ -489,7 +489,7 @@ class RunDiagnosticsHook(Hook):
 
         grad_norm = None
         history = runner.message_hub.log_scalars.get("train/grad_norm")
-        if history is not None and history.data[0]:
+        if history is not None and len(history.data[0]) > 0:
             grad_norm = self._scalar(history.current())
         clip_grad_kwargs = getattr(runner.optim_wrapper, "clip_grad_kwargs", None) or {}
         clip_threshold = self._scalar(clip_grad_kwargs.get("max_norm"))
