@@ -5,6 +5,7 @@ import math
 import numpy as np
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -239,15 +240,22 @@ class AnticipationHead(BaseHead):
             index for index, data_sample in enumerate(data_samples)
             if bool(data_sample.target)
         ]
-        if not positive_indices or cls_scores.shape[1] < 2:
-            # Keep a differentiable zero so batches without positives can
-            # still use the same loss/backward path safely.
-            return cls_scores.sum() * 0.0
+        if positive_indices and cls_scores.shape[1] >= 2:
+            positive_scores = cls_scores[positive_indices]
+            local_sum = (
+                positive_scores[:, 1:].detach() - positive_scores[:, :-1]
+            ).square().mean(dim=1).sum()
+        else:
+            local_sum = cls_scores.sum() * 0.0
 
-        positive_scores = cls_scores[positive_indices]
-        return (
-            positive_scores[:, 1:].detach() - positive_scores[:, :-1]
-        ).square().mean()
+        # DDP averages gradients across ranks. Scale each local sum by the
+        # world size so the averaged gradient equals the global positive mean.
+        count = torch.tensor(float(len(positive_indices)), device=cls_scores.device)
+        world_size = 1
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(count, op=dist.ReduceOp.SUM)
+            world_size = dist.get_world_size()
+        return local_sum * world_size / count.clamp_min(1)
 
 
     def loss_by_feat(self, cls_scores: torch.Tensor, data_samples: SampleList) -> Dict:
